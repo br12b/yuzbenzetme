@@ -30,9 +30,9 @@ const Landing: React.FC<LandingProps> = ({ onImageUpload }) => {
       </div>
 
       <div className="max-w-xl text-sm md:text-base leading-relaxed opacity-90 border-l-2 border-green-500 pl-4 text-left">
-        <p className="mb-2">>> INITIATING BIOMETRIC SEQUENCE...</p>
-        <p className="mb-2">>> TARGET: IDENTIFY HISTORICAL LINEAGE.</p>
-        <p>>> PROTOCOL: DEEP FACIAL ANALYSIS.</p>
+        <p className="mb-2">&gt;&gt; INITIATING BIOMETRIC SEQUENCE...</p>
+        <p className="mb-2">&gt;&gt; TARGET: IDENTIFY HISTORICAL LINEAGE.</p>
+        <p>&gt;&gt; PROTOCOL: DEEP FACIAL ANALYSIS.</p>
       </div>
 
       <div className="mt-8 group">
