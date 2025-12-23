@@ -31,7 +31,7 @@ const App: React.FC = () => {
     } catch (err: any) {
       console.error(err);
       const errorMessage = err?.message || "Bilinmeyen sunucu hatası";
-      setError(`Sistem Hatası: ${errorMessage}`);
+      setError(errorMessage);
       setStep(AppStep.ERROR);
     }
   };
@@ -81,14 +81,21 @@ const App: React.FC = () => {
           )}
 
           {step === AppStep.ERROR && (
-             <div className="cyber-box p-8 text-center max-w-md">
-                <h2 className="text-red-500 text-3xl font-bold mb-4">SYSTEM_FAILURE</h2>
-                <p className="mb-6 text-sm break-words">{error}</p>
+             <div className="cyber-box p-8 text-center max-w-md border-red-500 shadow-[0_0_20px_rgba(255,0,0,0.3)]">
+                <div className="mb-6 flex justify-center">
+                    <svg className="w-16 h-16 text-red-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <h2 className="text-red-500 text-3xl font-bold mb-4 tracking-widest">SYSTEM_FAILURE</h2>
+                <div className="bg-red-900/10 border border-red-500/30 p-4 mb-6 text-red-400 text-sm font-bold break-words">
+                    {error}
+                </div>
                 <button 
                   onClick={resetApp}
-                  className="px-6 py-2 bg-red-900 text-white border border-red-500 hover:bg-red-700 transition-colors uppercase tracking-widest"
+                  className="px-8 py-3 bg-transparent border-2 border-red-500 text-red-500 hover:bg-red-500 hover:text-black transition-all uppercase tracking-widest font-bold"
                 >
-                  Reboot System
+                  REBOOT SYSTEM
                 </button>
              </div>
           )}

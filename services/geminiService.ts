@@ -141,10 +141,34 @@ export const analyzeImage = async (base64Image: string): Promise<AnalysisReport>
 
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
-    // Enhance error message for UI
-    if (error.message?.includes("403") || error.message?.includes("key")) {
-        throw new Error("API Anahtarı geçersiz veya yetkisiz. Lütfen Vercel'deki VITE_API_KEY'i kontrol edin.");
+    
+    let errorMessage = "Bilinmeyen sunucu hatası.";
+    const rawMessage = error.message || JSON.stringify(error);
+
+    // Handle Rate Limits (429)
+    if (rawMessage.includes("429") || rawMessage.includes("quota") || rawMessage.includes("RESOURCE_EXHAUSTED")) {
+        // Try to extract wait time
+        const waitMatch = rawMessage.match(/retry in ([\d\.]+)s/);
+        const seconds = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) : 60;
+        errorMessage = `⚠️ SİSTEM AŞIRI ISINDI (RATE LIMIT). Lütfen ${seconds} saniye soğumasını bekleyip tekrar deneyin.`;
+    } 
+    // Handle Auth Errors (403)
+    else if (rawMessage.includes("403") || rawMessage.includes("key") || rawMessage.includes("PERMISSION_DENIED")) {
+        errorMessage = "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz. Lütfen Vercel ayarlarını kontrol edin.";
     }
-    throw error;
+    // Handle Overloaded Model (503)
+    else if (rawMessage.includes("503") || rawMessage.includes("Overloaded")) {
+        errorMessage = "⚠️ AI MODELİ ŞU AN ÇOK YOĞUN. Lütfen 10 saniye sonra tekrar deneyin.";
+    }
+    else {
+        // If it's a raw JSON dump, try to make it readable or just show generic
+        if (rawMessage.includes("{")) {
+            errorMessage = "⚠️ AI BAĞLANTI HATASI. Lütfen tekrar deneyin.";
+        } else {
+            errorMessage = rawMessage;
+        }
+    }
+
+    throw new Error(errorMessage);
   }
 };
