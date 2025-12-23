@@ -1,31 +1,27 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisReport } from "../types";
 
-// Helper to safely get API key in various environments (Vite, Next.js, Standard)
+// Helper to safely get API key in various environments
 const getApiKey = () => {
-  try {
-    // @ts-ignore - Vite specific
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
-        // @ts-ignore
-        return import.meta.env.VITE_API_KEY;
-    }
-  } catch (e) {}
+  // 1. Try Vite Standard (Most likely for this project)
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+    // @ts-ignore
+    return import.meta.env.VITE_API_KEY;
+  }
 
-  try {
-     // Next.js specific
-     if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
-        return process.env.NEXT_PUBLIC_API_KEY;
-     }
-     // Standard Node/Fallback
-     if (typeof process !== 'undefined' && process.env?.API_KEY) {
-        return process.env.API_KEY;
-     }
-  } catch(e) {}
+  // 2. Try Next.js Standard
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    return process.env.NEXT_PUBLIC_API_KEY;
+  }
+
+  // 3. Try Generic/Node
+  if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    return process.env.API_KEY;
+  }
   
   return undefined;
 };
-
-const apiKey = getApiKey();
 
 const SYSTEM_INSTRUCTION = `
 Sen "Global Heritage & Biometric Matcher" isimli üst düzey biyometrik analiz sistemisin.
@@ -66,11 +62,13 @@ Yanıtın kesinlikle aşağıdaki JSON şemasına uygun olmalıdır. Başka hiç
 `;
 
 export const analyzeImage = async (base64Image: string): Promise<AnalysisReport> => {
+  const apiKey = getApiKey();
+
   if (!apiKey) {
-    throw new Error("API Anahtarı bulunamadı. Lütfen Vercel ayarlarında 'VITE_API_KEY' tanımlayın.");
+    console.error("API Key Missing! Checked: VITE_API_KEY, NEXT_PUBLIC_API_KEY, API_KEY");
+    throw new Error("API Anahtarı bulunamadı. Vercel ayarlarında 'VITE_API_KEY' olarak kaydettiğinizden ve REDEPLOY yaptığınızdan emin olun.");
   }
 
-  // Initialize Gemini Client inside the function to prevent crash on app load if key is missing
   const ai = new GoogleGenAI({ apiKey: apiKey });
 
   try {
@@ -134,15 +132,19 @@ export const analyzeImage = async (base64Image: string): Promise<AnalysisReport>
     });
 
     const text = response.text;
-    if (!text) throw new Error("No response from Gemini");
+    if (!text) throw new Error("Gemini'den boş yanıt döndü.");
 
     // Clean markdown code blocks if present
     const cleanText = text.replace(/```json|```/g, '').trim();
 
     return JSON.parse(cleanText) as AnalysisReport;
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
+    // Enhance error message for UI
+    if (error.message?.includes("403") || error.message?.includes("key")) {
+        throw new Error("API Anahtarı geçersiz veya yetkisiz. Lütfen Vercel'deki VITE_API_KEY'i kontrol edin.");
+    }
     throw error;
   }
 };
