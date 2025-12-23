@@ -1,8 +1,31 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisReport } from "../types";
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper to safely get API key in various environments (Vite, Next.js, Standard)
+const getApiKey = () => {
+  try {
+    // @ts-ignore - Vite specific
+    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+        // @ts-ignore
+        return import.meta.env.VITE_API_KEY;
+    }
+  } catch (e) {}
+
+  try {
+     // Next.js specific
+     if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+        return process.env.NEXT_PUBLIC_API_KEY;
+     }
+     // Standard Node/Fallback
+     if (typeof process !== 'undefined' && process.env?.API_KEY) {
+        return process.env.API_KEY;
+     }
+  } catch(e) {}
+  
+  return undefined;
+};
+
+const apiKey = getApiKey();
 
 const SYSTEM_INSTRUCTION = `
 Sen "Global Heritage & Biometric Matcher" isimli üst düzey biyometrik analiz sistemisin.
@@ -43,6 +66,13 @@ Yanıtın kesinlikle aşağıdaki JSON şemasına uygun olmalıdır. Başka hiç
 `;
 
 export const analyzeImage = async (base64Image: string): Promise<AnalysisReport> => {
+  if (!apiKey) {
+    throw new Error("API Anahtarı bulunamadı. Lütfen Vercel ayarlarında 'VITE_API_KEY' tanımlayın.");
+  }
+
+  // Initialize Gemini Client inside the function to prevent crash on app load if key is missing
+  const ai = new GoogleGenAI({ apiKey: apiKey });
+
   try {
     const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
