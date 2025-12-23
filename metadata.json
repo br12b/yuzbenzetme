@@ -1,0 +1,5 @@
+{
+  "name": "Global Heritage & Biometric Matcher",
+  "description": "A cyberpunk-themed biometric analysis tool that matches facial features with historical figures using Gemini AI.",
+  "requestFramePermissions": []
+}
