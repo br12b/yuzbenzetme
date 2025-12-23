@@ -3,7 +3,7 @@ import { AnalysisReport } from "../types";
 
 // Helper to safely get API key in various environments
 const getApiKey = () => {
-  // 1. Try Vite Standard (Most likely for this project)
+  // 1. Try Vite Standard
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
     // @ts-ignore
@@ -23,6 +23,13 @@ const getApiKey = () => {
   return undefined;
 };
 
+// Modeller listesi (Sırayla denenecek)
+// Birinin kotası dolarsa diğerine geçer.
+const FALLBACK_MODELS = [
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash-latest', 
+];
+
 const SYSTEM_INSTRUCTION = `
 Sen "Global Heritage & Biometric Matcher" isimli üst düzey biyometrik analiz sistemisin.
 
@@ -33,11 +40,6 @@ KURALLAR:
 1. **KİMLİK TESPİTİ SERBEST VE ÖNCELİKLİ:** Eğer yüklenen fotoğraf günümüzün popüler bir ismine (örn: Kıvanç Tatlıtuğ, Scarlett Johansson, Ronaldo) benziyorsa, direkt olarak o ismi ver. Tarihsel zorlama yapma. En yüksek benzerlik kimse o çıkmalı.
 2. **KAPSAM:** Hollywood yıldızları, Yeşilçam oyuncuları, dünya liderleri, sporcular ve tarihi şahsiyetlerin hepsi tarama havuzunda olsun.
 3. **BİLİMSEL VE ETKİLEYİCİ DİL:** Sonucu sunarken "Tıpkı ona benziyorsun" gibi basit cümleler kurma. Şöyle de: "Yüz hatlarınızdaki altın oran ve orbital kemik yapısı, %96 oranında [İSİM] ile biyometrik eşleşme göstermektedir."
-
-Analiz Sürecin:
-1. Görseli tara: Göz, dudak, burun ve çene koordinatlarını çıkar.
-2. Veritabanını tara: Modern ve tarihi tüm ünlüleri karşılaştır.
-3. Eşleştir: En yüksek yüzdeyi vereni ana sonuç yap.
 
 Cevap Formatın (JSON):
 Yanıtın kesinlikle aşağıdaki JSON şemasına uygun olmalıdır. Başka hiçbir metin ekleme.
@@ -61,114 +63,120 @@ Yanıtın kesinlikle aşağıdaki JSON şemasına uygun olmalıdır. Başka hiç
 }
 `;
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const analyzeImage = async (base64Image: string): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
   if (!apiKey) {
     console.error("API Key Missing! Checked: VITE_API_KEY, NEXT_PUBLIC_API_KEY, API_KEY");
-    throw new Error("API Anahtarı bulunamadı. Vercel ayarlarında 'VITE_API_KEY' olarak kaydettiğinizden ve REDEPLOY yaptığınızdan emin olun.");
+    throw new Error("API Anahtarı bulunamadı. Vercel ayarlarında 'VITE_API_KEY' girildiğinden emin olun.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
+  const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
-  try {
-    const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+  let lastError: any = null;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          {
-            text: "Fotoğrafı analiz et. Modern ünlü, oyuncu veya tarihi figür fark etmeksizin EN ÇOK BENZEYEN kişiyi bul ve JSON raporu oluştur."
-          },
-          {
-            inlineData: {
-              data: cleanBase64,
-              mimeType: 'image/jpeg' 
-            }
-          }
-        ]
-      },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-                metrics: {
-                    type: Type.OBJECT,
-                    properties: {
-                        cheekbones: { type: Type.STRING },
-                        eyes: { type: Type.STRING },
-                        jawline: { type: Type.STRING }
-                    },
-                    required: ["cheekbones", "eyes", "jawline"]
+  // Akıllı Model Deneme Döngüsü
+  for (const modelName of FALLBACK_MODELS) {
+    try {
+        console.log(`Trying model: ${modelName}...`);
+        
+        const response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+                parts: [
+                {
+                    text: "Fotoğrafı analiz et. Modern ünlü, oyuncu veya tarihi figür fark etmeksizin EN ÇOK BENZEYEN kişiyi bul ve JSON raporu oluştur."
                 },
-                mainMatch: {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        percentage: { type: Type.STRING },
-                        reason: { type: Type.STRING }
-                    },
-                    required: ["name", "percentage", "reason"]
-                },
-                alternatives: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            name: { type: Type.STRING },
-                            percentage: { type: Type.STRING }
-                        },
-                        required: ["name", "percentage"]
+                {
+                    inlineData: {
+                    data: cleanBase64,
+                    mimeType: 'image/jpeg' 
                     }
-                },
-                soulSignature: { type: Type.STRING }
+                }
+                ]
             },
-            required: ["metrics", "mainMatch", "alternatives", "soulSignature"]
+            config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        metrics: {
+                            type: Type.OBJECT,
+                            properties: {
+                                cheekbones: { type: Type.STRING },
+                                eyes: { type: Type.STRING },
+                                jawline: { type: Type.STRING }
+                            },
+                            required: ["cheekbones", "eyes", "jawline"]
+                        },
+                        mainMatch: {
+                            type: Type.OBJECT,
+                            properties: {
+                                name: { type: Type.STRING },
+                                percentage: { type: Type.STRING },
+                                reason: { type: Type.STRING }
+                            },
+                            required: ["name", "percentage", "reason"]
+                        },
+                        alternatives: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    percentage: { type: Type.STRING }
+                                },
+                                required: ["name", "percentage"]
+                            }
+                        },
+                        soulSignature: { type: Type.STRING }
+                    },
+                    required: ["metrics", "mainMatch", "alternatives", "soulSignature"]
+                }
+            }
+        });
+
+        const text = response.text;
+        if (!text) throw new Error("Boş yanıt alındı.");
+
+        const cleanText = text.replace(/```json|```/g, '').trim();
+        return JSON.parse(cleanText) as AnalysisReport;
+
+    } catch (error: any) {
+        lastError = error;
+        const msg = error.message || "";
+        
+        // Eğer hata 429 (Rate Limit) veya 503 (Overloaded) ise diğer modele geç
+        if (msg.includes("429") || msg.includes("quota") || msg.includes("503") || msg.includes("RESOURCE_EXHAUSTED")) {
+            console.warn(`Model ${modelName} dolu, sıradaki modele geçiliyor...`);
+            await wait(1500); // Kısa bir bekleme
+            continue; // Döngüye devam et (sonraki model)
         }
-      }
-    });
-
-    const text = response.text;
-    if (!text) throw new Error("Gemini'den boş yanıt döndü.");
-
-    // Clean markdown code blocks if present
-    const cleanText = text.replace(/```json|```/g, '').trim();
-
-    return JSON.parse(cleanText) as AnalysisReport;
-
-  } catch (error: any) {
-    console.error("Gemini Analysis Error:", error);
-    
-    let errorMessage = "Bilinmeyen sunucu hatası.";
-    const rawMessage = error.message || JSON.stringify(error);
-
-    // Handle Rate Limits (429)
-    if (rawMessage.includes("429") || rawMessage.includes("quota") || rawMessage.includes("RESOURCE_EXHAUSTED")) {
-        // Try to extract wait time
-        const waitMatch = rawMessage.match(/retry in ([\d\.]+)s/);
-        const seconds = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) : 60;
-        errorMessage = `⚠️ SİSTEM AŞIRI ISINDI (RATE LIMIT). Lütfen ${seconds} saniye soğumasını bekleyip tekrar deneyin.`;
-    } 
-    // Handle Auth Errors (403)
-    else if (rawMessage.includes("403") || rawMessage.includes("key") || rawMessage.includes("PERMISSION_DENIED")) {
-        errorMessage = "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz. Lütfen Vercel ayarlarını kontrol edin.";
+        
+        // Başka bir hataysa (örn: API Key hatalı), döngüyü kır ve hatayı fırlat
+        break; 
     }
-    // Handle Overloaded Model (503)
-    else if (rawMessage.includes("503") || rawMessage.includes("Overloaded")) {
-        errorMessage = "⚠️ AI MODELİ ŞU AN ÇOK YOĞUN. Lütfen 10 saniye sonra tekrar deneyin.";
-    }
-    else {
-        // If it's a raw JSON dump, try to make it readable or just show generic
-        if (rawMessage.includes("{")) {
-            errorMessage = "⚠️ AI BAĞLANTI HATASI. Lütfen tekrar deneyin.";
-        } else {
-            errorMessage = rawMessage;
-        }
-    }
-
-    throw new Error(errorMessage);
   }
+
+  // Eğer tüm modeller başarısız olursa buraya düşer
+  console.error("All models failed:", lastError);
+  
+  let errorMessage = "Bilinmeyen sunucu hatası.";
+  const rawMessage = lastError?.message || JSON.stringify(lastError);
+
+  if (rawMessage.includes("429") || rawMessage.includes("quota")) {
+      const waitMatch = rawMessage.match(/retry in ([\d\.]+)s/);
+      const seconds = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) : 30;
+      errorMessage = `⚠️ SİSTEM AŞIRI YOĞUN. Lütfen ${seconds} saniye bekleyip tekrar deneyin.`;
+  } else if (rawMessage.includes("403") || rawMessage.includes("key")) {
+      errorMessage = "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz.";
+  } else {
+      errorMessage = "⚠️ BAĞLANTI HATASI: Lütfen tekrar deneyin.";
+  }
+
+  throw new Error(errorMessage);
 };
