@@ -114,7 +114,7 @@ const Scanning: React.FC<ScanningProps> = ({ image, onComplete, lang }) => {
             <span className="text-green-500/40 mr-2">
                 {`[${(log.id % 10000).toString().padStart(4, '0')}]`}
             </span>
-            <span className="text-green-400">> {log.text}</span>
+            <span className="text-green-400">&gt; {log.text}</span>
           </div>
         ))}
       </div>

@@ -176,7 +176,7 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
                      {/* Decoration */}
                     <div className="absolute -left-3 top-0 bottom-0 w-[1px] bg-gradient-to-b from-green-500/50 to-transparent"></div>
                     
-                    <span className="text-green-500 mr-2">>> {t.decipher}:</span>
+                    <span className="text-green-500 mr-2">&gt;&gt; {t.decipher}:</span>
                     <TypewriterText text={report.soulSignature} speed={25} />
                     <span className="animate-pulse inline-block w-2 h-4 bg-green-500 ml-1 align-middle"></span>
                 </div>
@@ -189,7 +189,7 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
                     <div className="space-y-2">
                         {report.alternatives.map((alt, idx) => (
                             <div key={idx} className="flex justify-between items-center text-xs group cursor-default p-1 hover:bg-green-500/10 rounded" onMouseEnter={() => playSound.hover()}>
-                                <span className="text-white/80 group-hover:text-green-400 transition-colors">> {alt.name}</span>
+                                <span className="text-white/80 group-hover:text-green-400 transition-colors">&gt; {alt.name}</span>
                                 <span className="font-bold text-green-500">%{alt.percentage}</span>
                             </div>
                         ))}
