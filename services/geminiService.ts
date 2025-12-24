@@ -4,22 +4,26 @@ import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types"
 
 // Helper to safely get API key in various environments
 const getApiKey = () => {
+  // 1. Try Vite (most common for React SPAs)
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
     // @ts-ignore
     return import.meta.env.VITE_API_KEY;
   }
+  // 2. Try Next.js Public
   if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
     return process.env.NEXT_PUBLIC_API_KEY;
   }
+  // 3. Try standard Process Env (Node/Server-side only usually)
   if (typeof process !== 'undefined' && process.env?.API_KEY) {
     return process.env.API_KEY;
   }
   return undefined;
 };
 
-// Resize image to reduce payload size (prevents Network Error on large uploads)
-const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
+// Drastically reduce image size to prevent "Network Error" / "Failed to fetch"
+// Previous 1024px was too heavy for some connections. Now using 800px and 0.6 quality.
+const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64Str;
@@ -28,6 +32,7 @@ const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
       let width = img.width;
       let height = img.height;
 
+      // Maintain aspect ratio
       if (width > maxWidth) {
         height *= maxWidth / width;
         width = maxWidth;
@@ -37,8 +42,12 @@ const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        // Draw on white background to handle transparent PNGs
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.8)); // Compress
+        // Aggressive compression (0.6)
+        resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
       }
@@ -48,89 +57,53 @@ const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
 };
 
 const FALLBACK_MODELS = [
-    'gemini-3-flash-preview',
-    'gemini-2.5-flash-latest', 
+    'gemini-2.5-flash-latest', // Fast and cost-effective
+    'gemini-3-flash-preview', // Newer, experimental
 ];
 
 // --- DYNAMIC SYSTEM INSTRUCTIONS ---
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
   const languageDirective = lang === 'tr' 
-    ? "Tüm yanıtlarını ve analizlerini TÜRKÇE olarak ver." 
-    : "Provide all responses and analyses in ENGLISH.";
+    ? "YANIT DİLİ: TÜRKÇE." 
+    : "RESPONSE LANGUAGE: ENGLISH.";
 
   const baseJsonInstruction = `
-    Response Format (JSON):
-    Your response must STRICTLY follow this JSON schema. Do not add any other text.
+    RETURN JSON ONLY. NO MARKDOWN.
+    Schema:
     {
-      "metrics": { "cheekbones": "...", "eyes": "...", "jawline": "..." },
-      "mainMatch": { "name": "...", "percentage": "90-99", "reason": "..." },
-      "alternatives": [ { "name": "...", "percentage": "..." }, { "name": "...", "percentage": "..." } ],
+      "metrics": { "cheekbones": "string", "eyes": "string", "jawline": "string" },
+      "mainMatch": { "name": "string", "percentage": "number(70-99)", "reason": "string" },
+      "alternatives": [ { "name": "string", "percentage": "string" }, { "name": "string", "percentage": "string" } ],
       "attributes": { "intelligence": 0-100, "dominance": 0-100, "creativity": 0-100, "resilience": 0-100, "charisma": 0-100 },
-      "soulSignature": "..."
+      "soulSignature": "string"
     }
   `;
 
   // --- STYLE MODIFIERS ---
   const scientificTone = `
-    TONE: Highly professional, biometric, scientific, cold, slightly futuristic. 
-    Use terms like "craniofacial structure", "canthal tilt", "zygomatic arch", "phenotype". 
-    The "Soul Signature" should read like a psychological dossier from a dystopian government.
+    ROLE: Biometric AI Scanner.
+    TONE: Cold, clinical, scientific.
+    KEYWORDS: Craniofacial, Phenotype, Golden Ratio, Zygomatic.
   `;
 
   const roastTone = `
-    TONE: Savage, funny, internet slang, "roast" style, edgy (but not bannable). 
-    Use terms like "negative canthal tilt", "looks like they trade crypto", "main character energy". 
-    The "Soul Signature" must be a funny, meme-worthy personality read.
+    ROLE: Sarcastic Roast AI.
+    TONE: Funny, edgy, meme-culture.
+    KEYWORDS: Skill issue, NPC energy, Main character syndrome.
   `;
 
   const selectedTone = style === AnalysisStyle.ROAST ? roastTone : scientificTone;
 
+  let task = "";
   if (mode === AnalysisMode.PAST_LIFE) {
-    return `
-      You are "Chrono-Metric Time Traveler" system.
-      TASK: Analyze the user's facial features to find their "Past Life" (Reincarnation).
-      ${selectedTone}
-      ${languageDirective}
-      
-      RULES:
-      1. Match with historical figures (kings, peasants, warriors, weird inventors).
-      2. "Reason": Explain why based on facial features.
-      3. "Soul Signature": Describe how they died or lived in the past life.
-      
-      ${baseJsonInstruction}
-    `;
+    task = "Match user to a historical figure (peasant, warrior, royalty) based on face.";
+  } else if (mode === AnalysisMode.CYBER_ARCHETYPE) {
+    task = "Assign a Cyberpunk 2077 style role (Netrunner, Corpo, Nomad).";
+  } else {
+    task = "Match user to a celebrity or historical figure.";
   }
 
-  if (mode === AnalysisMode.CYBER_ARCHETYPE) {
-    return `
-      You are "Night City Neural Net".
-      TASK: Scan the user's face to determine their Dystopian/Cyberpunk role.
-      ${selectedTone}
-      ${languageDirective}
-      
-      RULES:
-      1. Give roles like "Corpo Rat", "Street Samurai", "Ripperdoc", "Fixer".
-      2. "Metrics": Describe the face as if scanning for cyber-implants.
-      3. "Soul Signature": Describe their survival rating in a cyberpunk city.
-      
-      ${baseJsonInstruction}
-    `;
-  }
-
-  // DEFAULT: HERITAGE MODE
-  return `
-    You are "Global Heritage & Biometric Matcher".
-    TASK: Analyze the user's face to find the best celebrity or historical match.
-    ${selectedTone}
-    ${languageDirective}
-    
-    RULES:
-    1. Match with celebrities, historical figures, or meme icons.
-    2. "Reason": Connect specific facial features to the match.
-    3. "Soul Signature": A deep personality analysis based on physiognomy.
-    
-    ${baseJsonInstruction}
-  `;
+  return `${task} ${selectedTone} ${languageDirective} ${baseJsonInstruction}`;
 };
 
 
@@ -139,8 +112,12 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
+  // Explicit check for API Key
   if (!apiKey) {
-    throw new Error(lang === 'tr' ? "API Anahtarı bulunamadı. (VITE_API_KEY veya NEXT_PUBLIC_API_KEY kontrol edin)" : "API Key not found.");
+    const errorMsg = lang === 'tr' 
+        ? "API Anahtarı Eksik! Vercel Ayarlarında 'NEXT_PUBLIC_API_KEY' veya 'VITE_API_KEY' adıyla anahtarınızı ekleyin." 
+        : "API Key Missing! Add 'NEXT_PUBLIC_API_KEY' or 'VITE_API_KEY' in Vercel Settings.";
+    throw new Error(errorMsg);
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
@@ -154,14 +131,14 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   for (const modelName of FALLBACK_MODELS) {
     try {
-        console.log(`Trying model: ${modelName} with mode: ${mode}, style: ${style}...`);
+        console.log(`Attempting model: ${modelName}`);
         
         const response = await ai.models.generateContent({
             model: modelName,
             contents: {
                 parts: [
                 {
-                    text: `Analyze this face. Mode: ${mode}. Style: ${style}. Language: ${lang}. Return JSON.`
+                    text: `Analyze face. Mode: ${mode}. Style: ${style}. Return JSON.`
                 },
                 {
                     inlineData: {
@@ -173,60 +150,16 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
             },
             config: {
                 systemInstruction: instruction,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        metrics: {
-                            type: Type.OBJECT,
-                            properties: {
-                                cheekbones: { type: Type.STRING },
-                                eyes: { type: Type.STRING },
-                                jawline: { type: Type.STRING }
-                            },
-                            required: ["cheekbones", "eyes", "jawline"]
-                        },
-                        mainMatch: {
-                            type: Type.OBJECT,
-                            properties: {
-                                name: { type: Type.STRING },
-                                percentage: { type: Type.STRING },
-                                reason: { type: Type.STRING }
-                            },
-                            required: ["name", "percentage", "reason"]
-                        },
-                        alternatives: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    name: { type: Type.STRING },
-                                    percentage: { type: Type.STRING }
-                                },
-                                required: ["name", "percentage"]
-                            }
-                        },
-                        attributes: {
-                           type: Type.OBJECT,
-                           properties: {
-                               intelligence: { type: Type.NUMBER },
-                               dominance: { type: Type.NUMBER },
-                               creativity: { type: Type.NUMBER },
-                               resilience: { type: Type.NUMBER },
-                               charisma: { type: Type.NUMBER }
-                           },
-                           required: ["intelligence", "dominance", "creativity", "resilience", "charisma"]
-                        },
-                        soulSignature: { type: Type.STRING }
-                    },
-                    required: ["metrics", "mainMatch", "alternatives", "soulSignature", "attributes"]
-                }
+                responseMimeType: "application/json" 
+                // Removed complex schema validation here to reduce token count and timeouts.
+                // We rely on the system instruction for JSON format.
             }
         });
 
         const text = response.text;
-        if (!text) throw new Error("Boş yanıt alındı.");
+        if (!text) throw new Error("Empty response");
 
+        // Clean markdown code blocks if present
         const cleanText = text.replace(/```json|```/g, '').trim();
         return JSON.parse(cleanText) as AnalysisReport;
 
@@ -235,39 +168,43 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
         const msg = error.message || "";
         console.warn(`Model ${modelName} failed:`, msg);
         
-        if (msg.includes("429") || msg.includes("quota") || msg.includes("503") || msg.includes("RESOURCE_EXHAUSTED")) {
-            console.warn(`Model ${modelName} busy, retrying...`);
-            await wait(1500);
+        // Retry logic for quotas
+        if (msg.includes("429") || msg.includes("503")) {
+            await wait(1000);
             continue; 
         }
-        // If it's a client error (400, 404), maybe try next model just in case of version mismatch
-        if (msg.includes("400") || msg.includes("404")) {
+        // If 400 (Bad Request), it might be the model doesn't support the feature or image is bad
+        if (msg.includes("400")) {
              continue;
         }
-        break; 
     }
   }
 
+  // Final Error Handling with User-Friendly Messages
   console.error("All models failed:", lastError);
-  let errorMessage = "Bilinmeyen sunucu hatası.";
+  let errorMessage = "System Malfunction.";
   const rawMessage = lastError?.message || JSON.stringify(lastError);
 
-  if (rawMessage.includes("429") || rawMessage.includes("quota")) {
-      const waitMatch = rawMessage.match(/retry in ([\d\.]+)s/);
-      const seconds = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) : 30;
+  if (rawMessage.includes("403") || rawMessage.includes("API key")) {
       errorMessage = lang === 'tr' 
-        ? `⚠️ SİSTEM AŞIRI YOĞUN. Lütfen ${seconds} saniye bekleyip tekrar deneyin.`
-        : `⚠️ SYSTEM OVERLOAD. Please wait ${seconds} seconds and retry.`;
-  } else if (rawMessage.includes("403")) {
-      errorMessage = lang === 'tr' ? "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz." : "⚠️ AUTH ERROR: Invalid API Key.";
+        ? "⚠️ API ANAHTARI HATASI: Vercel'deki API anahtarınızın doğru olduğundan ve başında boşluk olmadığından emin olun." 
+        : "⚠️ INVALID API KEY: Check your Vercel environment variables.";
   } else if (rawMessage.includes("Failed to fetch") || rawMessage.includes("NetworkError")) {
       errorMessage = lang === 'tr' 
-        ? "⚠️ AĞ HATASI: Sunucuya ulaşılamıyor. İnternet bağlantınızı kontrol edin veya görsel boyutunu küçültün." 
-        : "⚠️ NETWORK ERROR: Could not reach server.";
+        ? "⚠️ BAĞLANTI KOPTU: Görsel çok büyük veya internetiniz yavaş. Lütfen daha küçük bir fotoğraf deneyin." 
+        : "⚠️ NETWORK ERROR: Image too large or weak connection. Try a smaller photo.";
+  } else if (rawMessage.includes("429")) {
+      errorMessage = lang === 'tr' 
+        ? "⚠️ SİSTEM YOĞUN: Çok fazla istek gönderildi. 30 saniye bekleyin." 
+        : "⚠️ SYSTEM OVERLOAD: Too many requests. Wait 30s.";
+  } else if (rawMessage.includes("candidate")) {
+      errorMessage = lang === 'tr'
+        ? "⚠️ GÜVENLİK FİLTRESİ: Yüklenen görsel işlenemedi (NSFW veya belirsiz yüz)."
+        : "⚠️ SAFETY FILTER: Image blocked by AI safety protocols.";
   } else {
        errorMessage = lang === 'tr' 
-        ? `⚠️ BAĞLANTI HATASI: ${rawMessage.substring(0, 50)}...` 
-        : `⚠️ CONNECTION ERROR: ${rawMessage.substring(0, 50)}...`;
+        ? `⚠️ SUNUCU HATASI: ${rawMessage.substring(0, 40)}...` 
+        : `⚠️ SERVER ERROR: ${rawMessage.substring(0, 40)}...`;
   }
 
   throw new Error(errorMessage);
