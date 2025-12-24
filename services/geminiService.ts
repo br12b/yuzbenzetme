@@ -10,29 +10,23 @@ const getApiKey = () => {
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
     // @ts-ignore
-    key = import.meta.env.VITE_API_KEY;
+    return import.meta.env.VITE_API_KEY;
   }
   // 2. Try Next.js Public (common on Vercel)
-  else if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
-    key = process.env.NEXT_PUBLIC_API_KEY;
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    return process.env.NEXT_PUBLIC_API_KEY;
   }
   // 3. Try standard Process Env
-  else if (typeof process !== 'undefined' && process.env?.API_KEY) {
-    key = process.env.API_KEY;
+  if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    return process.env.API_KEY;
   }
 
-  // Debug logging (will show in browser console F12)
-  if (key) {
-    console.log(`API Key detected: ${key.substring(0, 4)}...${key.substring(key.length - 4)}`);
-  } else {
-    console.error("API Key not found in any environment variable (VITE_API_KEY, NEXT_PUBLIC_API_KEY, API_KEY)");
-  }
-
-  return key;
+  return undefined;
 };
 
-// Drastically reduce image size to prevent "Network Error" / "Failed to fetch"
-const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
+// Resize image ensures the payload isn't too large for the browser to handle,
+// but keeps quality high enough for the Pro model to analyze features.
+const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64Str;
@@ -53,7 +47,8 @@ const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.6)); 
+        // Quality 0.8 is good balance for Pro model
+        resolve(canvas.toDataURL('image/jpeg', 0.8)); 
       } else {
         resolve(base64Str);
       }
@@ -62,11 +57,12 @@ const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
   });
 };
 
-// Updated Model List - using exact names from documentation
+// --- HIGH QUALITY MODEL PRIORITY ---
+// We prioritize Pro for better reasoning on "Soul Signature" and facial features.
 const FALLBACK_MODELS = [
-    'gemini-2.5-flash',         // Stable 2.5
-    'gemini-flash-latest',      // Alias for latest flash
-    'gemini-3-flash-preview',   // Experimental 3.0
+    'gemini-1.5-pro',           // Best Quality / Reasoning
+    'gemini-1.5-flash',         // Faster Fallback
+    'gemini-2.0-flash-exp'      // Experimental / Bleeding Edge
 ];
 
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
@@ -88,7 +84,7 @@ const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: La
 
   const selectedTone = style === AnalysisStyle.ROAST 
     ? "ROLE: Roast Master. TONE: Savage, funny, rude but clever. Make fun of the user's face structure." 
-    : "ROLE: Biometric Scientist. TONE: Clinical, cold, precise, futuristic.";
+    : "ROLE: Biometric Scientist. TONE: Clinical, cold, precise, futuristic, detailed.";
 
   let task = "Match face to historical figure.";
   if (mode === AnalysisMode.PAST_LIFE) task = "Match face to a past life persona (peasant, warrior, etc).";
@@ -102,7 +98,9 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
-  // Explicit check for API Key
+  // Debug Log to console to verify Key
+  console.log("API Key Status:", apiKey ? `Present (Starts with ${apiKey.substring(0,5)}...)` : "MISSING");
+
   if (!apiKey) {
     const errorMsg = lang === 'tr' 
         ? "⚠️ API ANAHTARI BULUNAMADI! Lütfen Vercel ayarlarında 'VITE_API_KEY' değişkenini tanımladığınızdan ve PROJEYİ YENİDEN DAĞITTIĞINIZDAN (Redeploy) emin olun." 
@@ -121,7 +119,7 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   for (const modelName of FALLBACK_MODELS) {
     try {
-        console.log(`📡 Connecting to model: ${modelName}...`);
+        console.log(`📡 Connecting to high-performance model: ${modelName}...`);
         
         const response = await ai.models.generateContent({
             model: modelName,
@@ -133,7 +131,15 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
             },
             config: {
                 systemInstruction: instruction,
-                responseMimeType: "application/json" 
+                responseMimeType: "application/json",
+                // CRITICAL: Disable safety settings to prevent "Network Error" on face analysis
+                // Face analysis often triggers false positives in "Harassment" filters.
+                safetySettings: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ]
             }
         });
 
@@ -148,17 +154,16 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
         const msg = error.message || JSON.stringify(error);
         console.warn(`❌ Model ${modelName} failed:`, msg);
         
-        // If 404 (Not Found), try next model
-        if (msg.includes("404") || msg.includes("not found")) continue;
-        
-        // If 503 (Overloaded) or 429 (Quota), wait and try next
+        // If 404/400, try next. If 429/503, wait and retry.
         if (msg.includes("429") || msg.includes("503")) {
-            await wait(1000);
+            await wait(1500);
             continue; 
         }
-        
-        // If 400 (Bad Request), usually image or key issue, try next just in case
-        if (msg.includes("400")) continue;
+        if (msg.includes("404") || msg.includes("not found") || msg.includes("400")) {
+             continue;
+        }
+        // If it's a candidate safety block (finishReason: SAFETY), try next model
+        if (msg.includes("candidate")) continue;
     }
   }
 
@@ -170,24 +175,24 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (rawMessage.includes("403") || rawMessage.includes("API key")) {
       errorMessage = lang === 'tr' 
-        ? "⚠️ API ANAHTARI GEÇERSİZ: Vercel'deki anahtarınızın doğru olduğundan emin olun." 
-        : "⚠️ INVALID API KEY.";
+        ? `⚠️ API ANAHTARI GEÇERSİZ: Anahtarınızın (${apiKey?.substring(0,5)}...) geçerli olduğundan ve Google AI Studio'da faturalandırmanın (Billing) açık olduğundan emin olun.` 
+        : "⚠️ INVALID API KEY. Check billing.";
   } else if (rawMessage.includes("Failed to fetch") || rawMessage.includes("NetworkError")) {
       errorMessage = lang === 'tr' 
-        ? "⚠️ AĞ HATASI: Google sunucularına erişilemiyor. VPN kullanıyor olabilirsiniz veya API anahtarı 'Browser' kısıtlamasına takılıyor olabilir." 
-        : "⚠️ NETWORK ERROR: Check CORS or API Key restrictions.";
+        ? "⚠️ AĞ ENGELİ: Tarayıcınız veya İnternetiniz Google API'ye büyük veri göndermeyi engelliyor. VPN deneyin veya fotoğraf boyutunu küçültün." 
+        : "⚠️ NETWORK ERROR: Request blocked by browser/network.";
   } else if (rawMessage.includes("429")) {
       errorMessage = lang === 'tr' 
-        ? "⚠️ KOTA AŞIMI: Sistem şu an çok yoğun. Lütfen 1 dakika sonra tekrar deneyin." 
+        ? "⚠️ SİSTEM YOĞUNLUĞU: Kota aşıldı. 30 saniye bekleyin." 
         : "⚠️ QUOTA EXCEEDED: Try again later.";
-  } else if (rawMessage.includes("candidate")) {
+  } else if (rawMessage.includes("candidate") || rawMessage.includes("SAFETY")) {
       errorMessage = lang === 'tr'
-        ? "⚠️ GÜVENLİK: Görsel AI tarafından işlenemedi (Yüz net değil veya politika ihlali)."
-        : "⚠️ SAFETY FILTER: Image rejected.";
+        ? "⚠️ GÜVENLİK PROTOKOLÜ: Yüz hatları analiz edilemedi (AI Filtresi)."
+        : "⚠️ SAFETY FILTER: Analysis blocked.";
   } else {
        errorMessage = lang === 'tr' 
-        ? `⚠️ BEKLENMEYEN HATA: ${rawMessage.substring(0, 50)}...` 
-        : `⚠️ ERROR: ${rawMessage.substring(0, 50)}...`;
+        ? `⚠️ SİSTEM HATASI: ${rawMessage.substring(0, 60)}...` 
+        : `⚠️ ERROR: ${rawMessage.substring(0, 60)}...`;
   }
 
   throw new Error(errorMessage);
