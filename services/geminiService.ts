@@ -3,11 +3,14 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // --- CONFIGURATION ---
-// Updated to Gemini 3.0 Series as per Google AI Studio requirements.
-// 1.5 Series is causing 404/Deprecation errors.
+// STRATEGY CHANGE: 
+// Gemini 3.0 Preview models have very low rate limits (RPM) causing 429 errors.
+// Gemini 2.0 Flash Experimental has much higher quotas and is stable enough for production.
 const MODELS = [
-    'gemini-3-flash-preview',      // 1. NEW STANDARD (High Speed/Quota)
-    'gemini-3-pro-preview',        // 2. HIGH INTELLIGENCE (Fallback)
+    'gemini-2.0-flash-exp',        // 1. BEST QUOTA & SPEED (Experimental but stable)
+    'gemini-2.0-pro-exp-02-05',    // 2. HIGH INTELLIGENCE FALLBACK
+    'gemini-1.5-flash-8b',         // 3. ULTRA LIGHTWEIGHT (Emergency Backup)
+    'gemini-3-flash-preview'       // 4. ORIGINAL (Keep as last resort)
 ];
 
 const getApiKey = () => {
@@ -163,12 +166,13 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
         }
       }
     } catch (e: any) {
-      console.warn(`⚠️ ${modelName} Failed:`, e.message);
+      const msg = e.message || "Unknown error";
+      console.warn(`⚠️ ${modelName} Failed:`, msg);
       lastError = e;
       
-      // If error is 429 (Quota), wait 1s and try next model
-      if (e.message?.includes('429')) {
-        await wait(1000);
+      // If error is 429 (Quota), wait 1.5s before trying next model
+      if (msg.includes('429')) {
+        await wait(1500);
       }
     }
   }
@@ -195,8 +199,8 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   
   if (errStr.includes('429')) {
       throw new Error(lang === 'tr'
-        ? "⚠️ KOTA DOLDU (429): Ücretsiz tarama limitine takıldınız. 2 dakika bekleyin."
-        : "⚠️ RATE LIMIT (429): Quota exceeded. Wait 2 mins.");
+        ? "⚠️ KOTA DOLDU (429): Tüm modeller meşgul. Lütfen 30 saniye bekleyip tekrar deneyin."
+        : "⚠️ RATE LIMIT (429): All models busy. Wait 30s.");
   }
 
   if (errStr.includes('SAFETY') || errStr.includes('candidate')) {
