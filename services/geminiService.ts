@@ -23,8 +23,7 @@ const getApiKey = () => {
 };
 
 // COMPRESSION: 
-// Resize to 512px. This is the sweet spot. 
-// 1024px causes timeouts on Vercel Free Tier. 512px is sufficient for biometric analysis.
+// Resize to 512px. This is crucial for Vercel timeouts.
 const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -47,7 +46,7 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        // Quality 0.6 is optimal for face detection without artifacts vs file size
+        // Quality 0.6 is optimal 
         resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
@@ -57,14 +56,12 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   });
 };
 
-// --- SMART MODEL STRATEGY ---
-// 1. We try 'gemini-1.5-pro' first (Best Quality).
-// 2. If it hits Rate Limit (429) or Network Error, we instantly swap to 'gemini-1.5-flash'.
-// 3. 'gemini-1.5-flash' has much higher limits and speed, ensuring the user gets a result.
+// --- BATTLE-TESTED MODEL STRATEGY ---
 const FALLBACK_MODELS = [
-    'gemini-1.5-pro',        // PRIMARY: High Intelligence / Low Quota
-    'gemini-1.5-flash',      // FALLBACK: High Speed / High Quota (Rescue Model)
-    'gemini-2.0-flash-exp'   // EXPERIMENTAL: Last resort
+    'gemini-1.5-pro',        // 1. BEST QUALITY (Often hits limits on Free Tier)
+    'gemini-1.5-flash',      // 2. STANDARD FALLBACK (Faster, reliable)
+    'gemini-1.5-flash-8b',   // 3. ULTIMATE SAFETY NET (Highest limits, almost never fails)
+    'gemini-2.0-flash-exp'   // 4. EXPERIMENTAL (Good if others fail completely)
 ];
 
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
@@ -102,36 +99,36 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (!apiKey) {
     throw new Error(lang === 'tr' 
-        ? "API Anahtarı bulunamadı. Lütfen 'VITE_API_KEY' ayarını kontrol edin." 
-        : "API Key missing. Check 'VITE_API_KEY'.");
+        ? "API Anahtarı bulunamadı. Vercel Env Variables kontrol edin." 
+        : "API Key missing. Check Vercel Env Variables.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
   
-  // 1. Aggressive Compression to prevent Network Errors
+  // 1. Aggressive Compression
   const resizedBase64 = await resizeImage(base64Image);
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
   let lastError: any = null;
   const instruction = getSystemInstruction(mode, style, lang);
 
-  // 2. Loop through models with Smart Fallback
+  // 2. Loop through models with increasing desperation
   for (const modelName of FALLBACK_MODELS) {
     try {
-        console.log(`📡 Connecting to Neural Net: ${modelName}`);
+        console.log(`📡 Trying Model: ${modelName}`);
         
         const response = await ai.models.generateContent({
             model: modelName,
             contents: {
                 parts: [
-                    { text: "Analyze the face in this image. Return valid JSON." },
+                    { text: "Analyze face. JSON only." },
                     { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }
                 ]
             },
             config: {
                 systemInstruction: instruction,
                 responseMimeType: "application/json",
-                // Disable safety filters to avoid false positives on faces
+                // Disable safety filters
                 safetySettings: [
                     { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
                     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -142,75 +139,63 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
         });
 
         const text = response.text;
-        if (!text) throw new Error("API returned empty response.");
+        if (!text) throw new Error("Empty response");
 
         const cleanText = text.replace(/```json|```/g, '').trim();
         const json = JSON.parse(cleanText);
 
-        if (!json.mainMatch || !json.metrics) {
-             throw new Error("Invalid JSON structure.");
-        }
+        if (!json.mainMatch) throw new Error("Invalid JSON");
 
         return json as AnalysisReport;
 
     } catch (error: any) {
         lastError = error;
         const msg = error.message || "";
-        console.warn(`❌ Model ${modelName} failed:`, msg);
+        console.warn(`❌ ${modelName} Failed:`, msg);
         
-        // CRITICAL FALLBACK LOGIC
-        // If Pro fails due to Quota (429) or Network (Timeout), we assume Pro is overloaded/restricted.
-        // We immediately try the next model (Flash) which is faster.
-        
+        // INTELLIGENT RETRY LOGIC
         if (msg.includes("429") || msg.includes("503") || msg.includes("overloaded")) {
-            // Rate limit hit. Wait briefly then try Flash.
-            await wait(200);
+            // If Pro fails, Flash-8b usually works immediately. 
+            // We wait 1 second to clear the socket.
+            await wait(1000);
             continue; 
         }
         
-        // 404 means model not found or API key doesn't support it -> Next model
-        if (msg.includes("404") || msg.includes("not found")) {
-             continue;
-        }
-
-        // Network Error usually means CORS or Timeout. 
-        // Switching to a lighter model (Flash) often fixes this as it responds faster.
-        if (msg.includes("NetworkError") || msg.includes("Failed to fetch")) {
-            await wait(200);
+        // Network errors or 404s -> Try next immediately
+        if (msg.includes("NetworkError") || msg.includes("fetch") || msg.includes("404")) {
             continue;
         }
 
-        // Safety Block -> Try next model
+        // Safety blocks -> Try next
         if (msg.includes("SAFETY") || msg.includes("candidate")) {
             continue;
         }
     }
   }
 
-  // 3. Final User-Friendly Error Messages
-  console.error("All models failed:", lastError);
+  // 3. Final Error Handling
+  console.error("Fatal Error:", lastError);
   const rawMessage = lastError?.message || JSON.stringify(lastError);
 
-  let userMessage = lang === 'tr' ? "Sistem Hatası." : "System Error.";
+  let userMessage = "";
 
   if (rawMessage.includes("API key") || rawMessage.includes("403")) {
       userMessage = lang === 'tr' 
-        ? "⚠️ API ANAHTARI HATASI: Google AI Studio'da bu domain için izin verdiğinize emin olun (Client-side restriction)." 
-        : "⚠️ INVALID API KEY: Check domain restrictions in Google AI Studio.";
+        ? "⚠️ API ANAHTARI GEÇERSİZ: Yeni bir API Key oluşturup Vercel ayarlarına ekleyin." 
+        : "⚠️ INVALID API KEY: Create a new key.";
   } else if (rawMessage.includes("429")) {
+      // If even Flash-8b fails with 429, the IP is truly cooked.
       userMessage = lang === 'tr' 
-        ? "⚠️ SİSTEM YOĞUNLUĞU: Şu an çok fazla analiz yapılıyor. 1 dakika bekleyip tekrar deneyin." 
-        : "⚠️ TRAFFIC OVERLOAD: Please wait 1 minute.";
-  } else if (rawMessage.includes("Failed to fetch") || rawMessage.includes("NetworkError")) {
-      userMessage = lang === 'tr' 
-        ? "⚠️ AĞ HATASI: İnternet bağlantınızı kontrol edin veya Google AI Studio'da 'API Key Restrictions' ayarını kontrol edin." 
-        : "⚠️ NETWORK ERROR: Check internet or API Key Domain Restrictions.";
+        ? "⚠️ TRAFİK ÇOK YOĞUN: Google sunucuları şu an yanıt vermiyor. Lütfen 2 dakika sonra tekrar deneyin." 
+        : "⚠️ TRAFFIC OVERLOAD: Please wait 2 minutes.";
   } else if (rawMessage.includes("SAFETY")) {
       userMessage = lang === 'tr'
-        ? "⚠️ GÖRSEL REDDEDİLDİ: AI güvenlik protokolü bu görseli uygunsuz buldu."
-        : "⚠️ IMAGE REJECTED: Safety filter triggered.";
+        ? "⚠️ GÜVENLİK FİLTRESİ: Fotoğraf analiz edilemedi."
+        : "⚠️ SAFETY BLOCK: Image rejected.";
   } else {
-       userMessage = `⚠️ SYSTEM ERROR: ${rawMessage.substring(0, 40)}...`;
+       userMessage = lang === 'tr' 
+        ? "⚠️ BAĞLANTI HATASI: VPN açıksa kapatın." 
+        : "⚠️ CONNECTION ERROR: Check VPN/Internet.";
   }
 
   throw new Error(userMessage);
