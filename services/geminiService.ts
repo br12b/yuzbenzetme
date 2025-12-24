@@ -4,21 +4,37 @@ import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types"
 
 // Helper to safely get API key in various environments
 const getApiKey = () => {
-  // 1. Try Vite (most common for React SPAs created with Vite)
+  console.log("🔍 Checking Environment Variables for API Key...");
+
+  // 1. Try Vite Standard (Preferred for this project)
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+    console.log("✅ Found VITE_API_KEY");
     // @ts-ignore
     return import.meta.env.VITE_API_KEY;
   }
-  // 2. Try Next.js Public (common on Vercel)
+
+  // 2. Try VITE_KEY (In case user named it this way)
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
+    console.log("✅ Found VITE_KEY");
+    // @ts-ignore
+    return import.meta.env.VITE_KEY;
+  }
+
+  // 3. Try Next.js Public (Standard Vercel System Env)
   if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    console.log("✅ Found NEXT_PUBLIC_API_KEY");
     return process.env.NEXT_PUBLIC_API_KEY;
   }
-  // 3. Try standard Process Env
+
+  // 4. Try Standard Process Env
   if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    console.log("✅ Found API_KEY (Process)");
     return process.env.API_KEY;
   }
 
+  console.error("❌ API Key Missing. Please add VITE_API_KEY to Vercel Environment Variables and REDEPLOY.");
   return undefined;
 };
 
@@ -99,8 +115,8 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (!apiKey) {
     throw new Error(lang === 'tr' 
-        ? "API Anahtarı bulunamadı. Vercel Env Variables kontrol edin." 
-        : "API Key missing. Check Vercel Env Variables.");
+        ? "API Anahtarı bulunamadı. Lütfen Vercel ayarlarından 'VITE_API_KEY' ekleyin ve projeyi REDEPLOY edin." 
+        : "API Key missing. Add 'VITE_API_KEY' in Vercel and REDEPLOY.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
@@ -181,8 +197,8 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (rawMessage.includes("API key") || rawMessage.includes("403")) {
       userMessage = lang === 'tr' 
-        ? "⚠️ API ANAHTARI GEÇERSİZ: Yeni bir API Key oluşturup Vercel ayarlarına ekleyin." 
-        : "⚠️ INVALID API KEY: Create a new key.";
+        ? "⚠️ API ANAHTARI GEÇERSİZ: Vercel'de 'VITE_API_KEY' adıyla eklediğinizden emin olun ve projeyi Redeploy edin." 
+        : "⚠️ INVALID API KEY: Check Vercel Env Vars & Redeploy.";
   } else if (rawMessage.includes("429")) {
       // If even Flash-8b fails with 429, the IP is truly cooked.
       userMessage = lang === 'tr' 
