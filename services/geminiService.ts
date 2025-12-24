@@ -22,9 +22,9 @@ const getApiKey = () => {
   return undefined;
 };
 
-// --- CRITICAL FIX FOR NETWORK ERRORS ---
-// We reduce max width to 512px and quality to 0.6.
-// This reduces payload size by ~80%, preventing browser timeouts and CORS failures.
+// COMPRESSION: 
+// Resize to 512px. This is the sweet spot. 
+// 1024px causes timeouts on Vercel Free Tier. 512px is sufficient for biometric analysis.
 const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -47,7 +47,7 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        // Compress to 0.6 (60%) quality - Sufficient for AI to detect features, small enough for network
+        // Quality 0.6 is optimal for face detection without artifacts vs file size
         resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
@@ -57,13 +57,14 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   });
 };
 
-// MODEL LIST (UPDATED FOR STABILITY)
-// Using versioned models (002) is more stable than aliases.
+// --- SMART MODEL STRATEGY ---
+// 1. We try 'gemini-1.5-pro' first (Best Quality).
+// 2. If it hits Rate Limit (429) or Network Error, we instantly swap to 'gemini-1.5-flash'.
+// 3. 'gemini-1.5-flash' has much higher limits and speed, ensuring the user gets a result.
 const FALLBACK_MODELS = [
-    'gemini-1.5-pro',           // High Quality (Default)
-    'gemini-1.5-pro-latest',    // Fallback Pro
-    'gemini-1.5-flash',         // High Speed / High Quota (Safety Net)
-    'gemini-1.5-flash-8b'       // Micro model (Last resort)
+    'gemini-1.5-pro',        // PRIMARY: High Intelligence / Low Quota
+    'gemini-1.5-flash',      // FALLBACK: High Speed / High Quota (Rescue Model)
+    'gemini-2.0-flash-exp'   // EXPERIMENTAL: Last resort
 ];
 
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
@@ -107,17 +108,17 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
   
-  // 1. Aggressive Compression
+  // 1. Aggressive Compression to prevent Network Errors
   const resizedBase64 = await resizeImage(base64Image);
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
   let lastError: any = null;
   const instruction = getSystemInstruction(mode, style, lang);
 
-  // 2. Loop through models
+  // 2. Loop through models with Smart Fallback
   for (const modelName of FALLBACK_MODELS) {
     try {
-        console.log(`📡 Connecting to: ${modelName}`);
+        console.log(`📡 Connecting to Neural Net: ${modelName}`);
         
         const response = await ai.models.generateContent({
             model: modelName,
@@ -130,7 +131,7 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
             config: {
                 systemInstruction: instruction,
                 responseMimeType: "application/json",
-                // Disable safety filters to avoid "Block" errors on face scans
+                // Disable safety filters to avoid false positives on faces
                 safetySettings: [
                     { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
                     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -157,23 +158,25 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
         const msg = error.message || "";
         console.warn(`❌ Model ${modelName} failed:`, msg);
         
-        // 429 = Quota Exceeded. 
-        // If Pro fails (429), we MUST switch to Flash immediately in the next loop iteration.
-        // We add a tiny delay to let the network breathe.
+        // CRITICAL FALLBACK LOGIC
+        // If Pro fails due to Quota (429) or Network (Timeout), we assume Pro is overloaded/restricted.
+        // We immediately try the next model (Flash) which is faster.
+        
         if (msg.includes("429") || msg.includes("503") || msg.includes("overloaded")) {
-            await wait(500);
+            // Rate limit hit. Wait briefly then try Flash.
+            await wait(200);
             continue; 
         }
         
-        // 404 = Model not found (maybe API key region issue) -> Try next model
+        // 404 means model not found or API key doesn't support it -> Next model
         if (msg.includes("404") || msg.includes("not found")) {
              continue;
         }
 
-        // Network Error -> Likely image too big, but we already resized. 
-        // Could be internet connection. Try one more model just in case.
+        // Network Error usually means CORS or Timeout. 
+        // Switching to a lighter model (Flash) often fixes this as it responds faster.
         if (msg.includes("NetworkError") || msg.includes("Failed to fetch")) {
-            await wait(500);
+            await wait(200);
             continue;
         }
 
@@ -184,7 +187,7 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
     }
   }
 
-  // 3. Final Error Handling
+  // 3. Final User-Friendly Error Messages
   console.error("All models failed:", lastError);
   const rawMessage = lastError?.message || JSON.stringify(lastError);
 
@@ -192,22 +195,22 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (rawMessage.includes("API key") || rawMessage.includes("403")) {
       userMessage = lang === 'tr' 
-        ? "⚠️ API ANAHTARI GEÇERSİZ: Faturalandırma hesabınızı kontrol edin." 
-        : "⚠️ INVALID API KEY.";
+        ? "⚠️ API ANAHTARI HATASI: Google AI Studio'da bu domain için izin verdiğinize emin olun (Client-side restriction)." 
+        : "⚠️ INVALID API KEY: Check domain restrictions in Google AI Studio.";
   } else if (rawMessage.includes("429")) {
       userMessage = lang === 'tr' 
-        ? "⚠️ SİSTEM YOĞUNLUĞU: Google sunucuları şu an çok yoğun. Lütfen 30 saniye sonra tekrar deneyin." 
-        : "⚠️ TRAFFIC OVERLOAD: Please wait 30 seconds.";
+        ? "⚠️ SİSTEM YOĞUNLUĞU: Şu an çok fazla analiz yapılıyor. 1 dakika bekleyip tekrar deneyin." 
+        : "⚠️ TRAFFIC OVERLOAD: Please wait 1 minute.";
   } else if (rawMessage.includes("Failed to fetch") || rawMessage.includes("NetworkError")) {
       userMessage = lang === 'tr' 
-        ? "⚠️ AĞ HATASI: İnternet bağlantınızı kontrol edin. (VPN kullanıyorsanız kapatmayı deneyin)." 
-        : "⚠️ NETWORK ERROR: Check internet/VPN.";
+        ? "⚠️ AĞ HATASI: İnternet bağlantınızı kontrol edin veya Google AI Studio'da 'API Key Restrictions' ayarını kontrol edin." 
+        : "⚠️ NETWORK ERROR: Check internet or API Key Domain Restrictions.";
   } else if (rawMessage.includes("SAFETY")) {
       userMessage = lang === 'tr'
-        ? "⚠️ GÖRSEL REDDEDİLDİ: AI bu görseli analiz edemedi."
+        ? "⚠️ GÖRSEL REDDEDİLDİ: AI güvenlik protokolü bu görseli uygunsuz buldu."
         : "⚠️ IMAGE REJECTED: Safety filter triggered.";
   } else {
-       userMessage = `⚠️ ER: ${rawMessage.substring(0, 40)}...`;
+       userMessage = `⚠️ SYSTEM ERROR: ${rawMessage.substring(0, 40)}...`;
   }
 
   throw new Error(userMessage);
