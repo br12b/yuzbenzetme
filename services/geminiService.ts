@@ -3,57 +3,10 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // --- CONFIGURATION ---
-// Priority: Stability > Speed > Experimental
-const MODELS = [
-    'gemini-1.5-flash',      // 1. Rock Solid Stability (High Quota)
-    'gemini-1.5-flash-8b',   // 2. High Speed Backup
-    'gemini-2.0-flash-exp'   // 3. Experimental (Good smarts, risky quota)
-];
-
-// --- SIMULATION DATA GENERATOR (FALLBACK) ---
-// If API fails completely, use this to keep the app running without error screens.
-const generateSimulationReport = (mode: AnalysisMode, lang: Language): AnalysisReport => {
-    const isTr = lang === 'tr';
-    
-    // Random Heritage Matches
-    const figures = [
-        { name: "Marcus Aurelius", reason: isTr ? "Alın yapısı ve stoik bakış açısı %94 uyumlu." : "Forehead structure and stoic gaze 94% match." },
-        { name: "Marie Curie", reason: isTr ? "Göz açıklığı ve zeka parıltısı %92 uyumlu." : "Eye spacing and intellectual spark 92% match." },
-        { name: "Alexander the Great", reason: isTr ? "Çene hattı ve liderlik aurası %95 uyumlu." : "Jawline and leadership aura 95% match." },
-        { name: "Cleopatra", reason: isTr ? "Elmacık kemikleri ve genetik çekim %93 uyumlu." : "Cheekbones and genetic allure 93% match." },
-        { name: "Nikola Tesla", reason: isTr ? "Yüz simetrisi ve vizyoner bakış %91 uyumlu." : "Face symmetry and visionary gaze 91% match." }
-    ];
-    
-    const randomFigure = figures[Math.floor(Math.random() * figures.length)];
-    const score = Math.floor(Math.random() * (98 - 85) + 85);
-
-    return {
-        metrics: {
-            cheekbones: isTr ? "Yüksek / Belirgin" : "High / Prominent",
-            eyes: isTr ? "Badem / Simetrik" : "Almond / Symmetrical",
-            jawline: isTr ? "Keskin / Köşeli" : "Sharp / Angular"
-        },
-        mainMatch: {
-            name: randomFigure.name,
-            percentage: score.toString(),
-            reason: randomFigure.reason
-        },
-        alternatives: [
-            { name: "Leonardo da Vinci", percentage: (score - 5).toString() },
-            { name: "Joan of Arc", percentage: (score - 12).toString() }
-        ],
-        attributes: {
-            intelligence: Math.floor(Math.random() * 20 + 80),
-            dominance: Math.floor(Math.random() * 30 + 60),
-            creativity: Math.floor(Math.random() * 20 + 80),
-            resilience: Math.floor(Math.random() * 30 + 70),
-            charisma: Math.floor(Math.random() * 25 + 75)
-        },
-        soulSignature: isTr 
-            ? "SİMÜLASYON MODU: Biyometrik verileriniz, tarihteki büyük reformcularla güçlü bir rezonans gösteriyor. Analitik zekanız ve sezgisel gücünüz dengeli." 
-            : "SIMULATION MODE: Your biometric data shows strong resonance with historical reformers. Balanced analytical intelligence and intuitive power."
-    };
-};
+// STRICT MODE: Only use the model with the HIGHEST FREE TIER QUOTA.
+// 'gemini-1.5-flash' allows ~15 RPM (Requests Per Minute) on free tier.
+// Others (Pro, Exp) allow only 2 RPM, causing immediate 429 errors.
+const MODEL_NAME = 'gemini-1.5-flash';
 
 const getApiKey = () => {
   let key = '';
@@ -98,10 +51,12 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        // High contrast background helps detection
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
+        // Reduce quality slightly to speed up upload
+        resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
       }
@@ -111,21 +66,35 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
 };
 
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
-  const langInst = lang === 'tr' ? "OUTPUT: TURKISH LANGUAGE." : "OUTPUT: ENGLISH LANGUAGE.";
+  const langInst = lang === 'tr' ? "OUTPUT LANGUAGE: TURKISH (Türkçe)." : "OUTPUT LANGUAGE: ENGLISH.";
   
   return `
-    ROLE: Advanced Biometric AI.
-    TASK: Analyze face, compare with history.
+    SYSTEM ROLE: You are an advanced Biometric AI Engine.
+    TASK: Analyze the facial features of the uploaded image and find a resemblance to a historical figure or celebrity.
     ${langInst}
-    MODE: ${mode}
-    STYLE: ${style === AnalysisStyle.ROAST ? 'Roast' : 'Scientific'}
     
-    RETURN JSON ONLY:
+    CONFIGURATION:
+    - MODE: ${mode}
+    - TONE: ${style === AnalysisStyle.ROAST ? 'Sarcastic, Sharp, Funny (Roast Mode)' : 'Scientific, Professional, Biometric Analysis'}
+    
+    INSTRUCTIONS:
+    1. Identify facial landmarks (jawline, cheekbones, eye spacing).
+    2. Find the closest match from history/pop-culture.
+    3. Calculate match percentage (must be between 75% and 99%).
+    4. Provide specific "Metrics" descriptions (e.g., "Angular", "High-set").
+    5. Generate a "Soul Signature" (a deep psychological reading based on the face).
+    6. Generate 5 personality attribute scores (0-100).
+    
+    IMPORTANT:
+    - DO NOT say "I cannot identify". Make a best-effort match based on visual geometry.
+    - Return ONLY valid JSON. No markdown formatting.
+    
+    JSON STRUCTURE:
     {
       "metrics": { "cheekbones": "string", "eyes": "string", "jawline": "string" },
-      "mainMatch": { "name": "string", "percentage": "number", "reason": "string" },
+      "mainMatch": { "name": "string", "percentage": "number (just the number)", "reason": "string" },
       "alternatives": [ { "name": "string", "percentage": "string" }, { "name": "string", "percentage": "string" } ],
-      "attributes": { "intelligence": 0-100, "dominance": 0-100, "creativity": 0-100, "resilience": 0-100, "charisma": 0-100 },
+      "attributes": { "intelligence": number, "dominance": number, "creativity": number, "resilience": number, "charisma": number },
       "soulSignature": "string"
     }
   `;
@@ -133,35 +102,66 @@ const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: La
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- RETRY LOGIC WRAPPER ---
+// This ensures we don't give up immediately on 429/503 errors.
+async function callApiWithRetry(ai: GoogleGenAI, params: any, maxRetries = 3) {
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+        try {
+            console.log(`📡 API Attempt ${attempt + 1}/${maxRetries}...`);
+            const result = await ai.models.generateContent(params);
+            return result;
+        } catch (error: any) {
+            attempt++;
+            const msg = error.message || '';
+            
+            // Critical errors that shouldn't be retried
+            if (msg.includes('API key') || msg.includes('403')) {
+                throw error;
+            }
+
+            // If it's the last attempt, throw
+            if (attempt >= maxRetries) {
+                console.error("🔥 All retries failed.");
+                throw error;
+            }
+
+            // Rate Limit (429) or Server Error (503/500) -> WAIT AND RETRY
+            if (msg.includes('429') || msg.includes('503') || msg.includes('500') || msg.includes('fetch')) {
+                console.warn(`⚠️ API Busy (429/503). Waiting ${attempt * 2}s before retry...`);
+                await wait(2000 * attempt); // Exponential backoff: 2s, 4s, 6s...
+                continue;
+            }
+
+            throw error;
+        }
+    }
+}
+
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
-  
-  // FAILSAFE 1: If no key, instantly return simulation
-  if (!apiKey || !apiKey.startsWith("AIza")) {
-      console.warn("⚠️ API Key missing/invalid. Switching to SIMULATION MODE.");
-      await wait(2000); // Fake delay for UX
-      return generateSimulationReport(mode, lang);
+
+  if (!apiKey) {
+    throw new Error(lang === 'tr' 
+      ? "API Anahtarı Eksik. Lütfen .env dosyasını kontrol edin." 
+      : "API Key Missing. Check configuration.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
+  
+  // Clean base64 string
   const resizedBase64 = await resizeImage(base64Image);
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+  
   const instruction = getSystemInstruction(mode, style, lang);
 
-  let success = false;
-  let resultJSON: any = null;
-
-  // 3. Attempt Models Sequence
-  for (const modelName of MODELS) {
-    if (success) break;
-    
-    try {
-      console.log(`📡 Connecting to: ${modelName}`);
-      const response = await ai.models.generateContent({
-        model: modelName,
+  try {
+      const response = await callApiWithRetry(ai, {
+        model: MODEL_NAME,
         contents: {
           parts: [
-            { text: "Analyze this face. Return strictly JSON." },
+            { text: "Analyze face. Return strictly JSON." },
             { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }
           ]
         },
@@ -172,29 +172,29 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
       });
 
       const text = response.text;
-      if (text) {
-        const cleanText = text.replace(/```json|```/g, '').trim();
-        resultJSON = JSON.parse(cleanText);
-        if (resultJSON.mainMatch) {
-            success = true;
-            console.log(`✅ Success with ${modelName}`);
-        }
+      if (!text) throw new Error("Empty response from AI");
+
+      // Clean markdown if AI adds it despite instructions
+      const cleanText = text.replace(/```json|```/g, '').trim();
+      const json = JSON.parse(cleanText);
+
+      return json as AnalysisReport;
+
+  } catch (error: any) {
+      console.error("Gemini Service Error:", error);
+      const errStr = error.message || "Unknown error";
+
+      if (errStr.includes('429')) {
+          throw new Error(lang === 'tr' 
+            ? "⚠️ Sunucu çok yoğun. Lütfen 1 dakika bekleyip tekrar deneyin. (Quota Exceeded)" 
+            : "⚠️ Server busy (Quota Exceeded). Please wait 1 min.");
       }
-    } catch (e: any) {
-      console.warn(`⚠️ ${modelName} Failed:`, e.message);
-      // Fast failover to next model
-      await wait(500);
-    }
+      if (errStr.includes('SAFETY')) {
+          throw new Error(lang === 'tr'
+            ? "⚠️ Görsel güvenlik filtresine takıldı. Başka bir fotoğraf deneyin."
+            : "⚠️ Safety Filter triggered. Try another photo.");
+      }
+      
+      throw new Error(lang === 'tr' ? "Bağlantı Hatası: " + errStr : "Connection Error: " + errStr);
   }
-
-  if (success && resultJSON) {
-    return resultJSON as AnalysisReport;
-  }
-
-  // FAILSAFE 2: If ALL models fail (Quota, Network, 500s), return simulation
-  console.error("🔥 ALL APIs FAILED. ACTIVATING SIMULATION MODE FALLBACK.");
-  // Simulate a little processing time so it feels real
-  if (!success) await wait(1000); 
-  
-  return generateSimulationReport(mode, lang);
 };
