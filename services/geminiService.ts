@@ -2,11 +2,18 @@
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // --- CONSTANTS ---
-// We use the direct REST API endpoint to avoid SDK version mismatches.
-// gemini-1.5-flash is the most stable model for free tier.
 const API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-const PRIMARY_MODEL = "gemini-1.5-flash";
-const BACKUP_MODEL = "gemini-1.5-flash-8b";
+
+// BU LISTE HAYAT KURTARIR:
+// Sırayla hepsini dener. Biri mutlaka çalışacaktır.
+const MODEL_PIPELINE = [
+    "gemini-1.5-flash",          // 1. Tercih edilen
+    "gemini-1.5-flash-latest",   // 2. Alias
+    "gemini-1.5-flash-001",      // 3. Spesifik versiyon
+    "gemini-1.5-pro",            // 4. Pro (Daha güçlü)
+    "gemini-1.5-pro-latest",     // 5. Pro Alias
+    "gemini-pro"                 // 6. Gemini 1.0 (Eski ama en güvenilir/yaygın)
+];
 
 const getApiKey = () => {
   // 1. Try Vite (Client-side standard)
@@ -109,6 +116,7 @@ async function callGeminiRest(modelName: string, apiKey: string, payload: any) {
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        // Hata detayını fırlat ki yakalayabilelim
         throw new Error(errorData.error?.message || `HTTP Error: ${response.status}`);
     }
 
@@ -132,6 +140,8 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   // Prepare Payload for REST API
   const payload = {
+      // Not: Bazı eski modeller 'system_instruction' desteklemez, ama v1beta genelde yutar.
+      // Desteklenmezse prompt içine gömmek daha garantidir ama şimdilik standart yapı kalsın.
       system_instruction: {
           parts: [{ text: instruction }]
       },
@@ -151,42 +161,38 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
       }
   };
 
-  try {
-      console.log(`📡 Connecting via REST API to ${PRIMARY_MODEL}...`);
-      const data = await callGeminiRest(PRIMARY_MODEL, apiKey, payload);
-      
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("Empty response from AI");
+  let lastError: any = null;
 
-      const cleanText = text.replace(/```json|```/g, '').trim();
-      return JSON.parse(cleanText) as AnalysisReport;
-
-  } catch (error: any) {
-      console.warn(`⚠️ Primary Model Failed: ${error.message}. Trying Backup...`);
-      
-      // Retry with Backup Model if primary fails
+  // --- THE LOOP OF HOPE ---
+  // Modelleri sırayla dener. Çalışan ilk sonucu döndürür.
+  for (const model of MODEL_PIPELINE) {
       try {
-           const data = await callGeminiRest(BACKUP_MODEL, apiKey, payload);
-           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-           if (!text) throw new Error("Empty response from Backup AI");
-           
-           const cleanText = text.replace(/```json|```/g, '').trim();
-           return JSON.parse(cleanText) as AnalysisReport;
-      } catch (backupError: any) {
-           console.error("🔥 All attempts failed.", backupError);
-           
-           const errStr = backupError.message || "Unknown error";
-           if (errStr.includes('429')) {
-               throw new Error(lang === 'tr' ? "Sunucu yoğun (Kota Doldu). Lütfen 1 dakika bekleyin." : "Server busy (Quota Exceeded). Wait 1 min.");
-           }
-           if (errStr.includes('400')) {
-                throw new Error(lang === 'tr' ? "Geçersiz İstek (Bad Request). Görsel formatını kontrol edin." : "Bad Request. Check image format.");
-           }
-           if (errStr.includes('403')) {
-                throw new Error(lang === 'tr' ? "Yetkisiz Erişim (403). API Anahtarınızı kontrol edin." : "Access Denied (403). Check API Key.");
-           }
-           
-           throw new Error(lang === 'tr' ? `Bağlantı Hatası: ${errStr}` : `Connection Error: ${errStr}`);
+          console.log(`📡 Connecting to Neural Core: ${model}...`);
+          const data = await callGeminiRest(model, apiKey, payload);
+          
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!text) throw new Error("Empty response from AI");
+
+          const cleanText = text.replace(/```json|```/g, '').trim();
+          console.log(`✅ Success with ${model}`);
+          return JSON.parse(cleanText) as AnalysisReport;
+
+      } catch (error: any) {
+          console.warn(`⚠️ Model ${model} Failed: ${error.message}`);
+          lastError = error;
+          
+          // API Key hatalıysa (400, 403) boşa döngüye girme, dur.
+          if (error.message.includes('API key') || error.message.includes('403')) {
+             throw new Error(lang === 'tr' ? "API Anahtarı geçersiz veya yetkisiz." : "Invalid or unauthorized API Key.");
+          }
+          
+          // 404 (Bulunamadı) veya 503 (Servis yok) ise devam et...
       }
   }
+
+  // Döngü bitti ve hala buradaysak hepsi patlamış demektir.
+  console.error("🔥 All models failed.", lastError);
+  throw new Error(lang === 'tr' 
+      ? `Bağlantı Hatası: Hiçbir model yanıt vermedi. (${lastError?.message?.substring(0, 30)}...)` 
+      : `Connection Error: All models failed. (${lastError?.message?.substring(0, 30)}...)`);
 };
