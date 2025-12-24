@@ -18,6 +18,35 @@ const getApiKey = () => {
   return undefined;
 };
 
+// Resize image to reduce payload size (prevents Network Error on large uploads)
+const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxWidth) {
+        height *= maxWidth / width;
+        width = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8)); // Compress
+      } else {
+        resolve(base64Str);
+      }
+    };
+    img.onerror = () => resolve(base64Str);
+  });
+};
+
 const FALLBACK_MODELS = [
     'gemini-3-flash-preview',
     'gemini-2.5-flash-latest', 
@@ -111,11 +140,14 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    throw new Error(lang === 'tr' ? "API Anahtarı bulunamadı." : "API Key not found.");
+    throw new Error(lang === 'tr' ? "API Anahtarı bulunamadı. (VITE_API_KEY veya NEXT_PUBLIC_API_KEY kontrol edin)" : "API Key not found.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
-  const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+  
+  // Resize image to prevent payload issues
+  const resizedBase64 = await resizeImage(base64Image);
+  const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
   let lastError: any = null;
   const instruction = getSystemInstruction(mode, style, lang);
@@ -201,11 +233,16 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
     } catch (error: any) {
         lastError = error;
         const msg = error.message || "";
+        console.warn(`Model ${modelName} failed:`, msg);
         
         if (msg.includes("429") || msg.includes("quota") || msg.includes("503") || msg.includes("RESOURCE_EXHAUSTED")) {
             console.warn(`Model ${modelName} busy, retrying...`);
             await wait(1500);
             continue; 
+        }
+        // If it's a client error (400, 404), maybe try next model just in case of version mismatch
+        if (msg.includes("400") || msg.includes("404")) {
+             continue;
         }
         break; 
     }
@@ -221,10 +258,16 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
       errorMessage = lang === 'tr' 
         ? `⚠️ SİSTEM AŞIRI YOĞUN. Lütfen ${seconds} saniye bekleyip tekrar deneyin.`
         : `⚠️ SYSTEM OVERLOAD. Please wait ${seconds} seconds and retry.`;
+  } else if (rawMessage.includes("403")) {
+      errorMessage = lang === 'tr' ? "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz." : "⚠️ AUTH ERROR: Invalid API Key.";
+  } else if (rawMessage.includes("Failed to fetch") || rawMessage.includes("NetworkError")) {
+      errorMessage = lang === 'tr' 
+        ? "⚠️ AĞ HATASI: Sunucuya ulaşılamıyor. İnternet bağlantınızı kontrol edin veya görsel boyutunu küçültün." 
+        : "⚠️ NETWORK ERROR: Could not reach server.";
   } else {
-      errorMessage = rawMessage.includes("403") 
-        ? (lang === 'tr' ? "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz." : "⚠️ AUTH ERROR: Invalid API Key.") 
-        : (lang === 'tr' ? "⚠️ BAĞLANTI HATASI: Lütfen tekrar deneyin." : "⚠️ CONNECTION ERROR: Please retry.");
+       errorMessage = lang === 'tr' 
+        ? `⚠️ BAĞLANTI HATASI: ${rawMessage.substring(0, 50)}...` 
+        : `⚠️ CONNECTION ERROR: ${rawMessage.substring(0, 50)}...`;
   }
 
   throw new Error(errorMessage);
