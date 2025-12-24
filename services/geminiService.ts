@@ -3,11 +3,11 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // --- CONFIGURATION ---
-// Priority List: Flash is safest for Vercel Free Tier.
+// Updated to Gemini 3.0 Series as per Google AI Studio requirements.
+// 1.5 Series is causing 404/Deprecation errors.
 const MODELS = [
-    'gemini-1.5-flash',      // 1. STABLE & FAST (High Quota)
-    'gemini-1.5-flash-8b',   // 2. BACKUP SPEEDSTER
-    'gemini-1.5-pro'         // 3. QUALITY FALLBACK (Only if others fail, likely to hit limits)
+    'gemini-3-flash-preview',      // 1. NEW STANDARD (High Speed/Quota)
+    'gemini-3-pro-preview',        // 2. HIGH INTELLIGENCE (Fallback)
 ];
 
 const getApiKey = () => {
@@ -152,8 +152,11 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
       const text = response.text;
       if (text) {
+        // Clean markdown code blocks if present
         const cleanText = text.replace(/```json|```/g, '').trim();
         resultJSON = JSON.parse(cleanText);
+        
+        // Validate basic structure
         if (resultJSON.mainMatch) {
             success = true;
             console.log(`✅ Success with ${modelName}`);
@@ -177,6 +180,12 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   // 4. Error Translation
   const errStr = lastError?.message || JSON.stringify(lastError);
   console.error("🔥 FATAL ERROR:", errStr);
+
+  if (errStr.includes('404')) {
+    throw new Error(lang === 'tr'
+      ? "⚠️ MODEL BULUNAMADI (404): Eski model adı kullanılıyor olabilir veya API anahtarı bu modele erişemiyor. Yeni bir API anahtarı deneyin."
+      : "⚠️ MODEL NOT FOUND (404): Check API Key or Model Access.");
+  }
 
   if (errStr.includes('403') || errStr.includes('API key not valid')) {
       throw new Error(lang === 'tr' 
