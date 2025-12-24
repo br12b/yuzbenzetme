@@ -2,44 +2,48 @@
 import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
-// Helper to safely get API key in various environments
-const getApiKey = () => {
-  console.log("🔍 Checking Environment Variables for API Key...");
+// --- CONFIGURATION ---
+// Priority List: Flash is safest for Vercel Free Tier.
+const MODELS = [
+    'gemini-1.5-flash',      // 1. STABLE & FAST (High Quota)
+    'gemini-1.5-flash-8b',   // 2. BACKUP SPEEDSTER
+    'gemini-1.5-pro'         // 3. QUALITY FALLBACK (Only if others fail, likely to hit limits)
+];
 
-  // 1. Try Vite Standard (Preferred for this project)
+const getApiKey = () => {
+  let key = '';
+
+  // 1. Try Vite (Client-side standard)
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
-    console.log("✅ Found VITE_API_KEY");
     // @ts-ignore
-    return import.meta.env.VITE_API_KEY;
+    key = import.meta.env.VITE_API_KEY;
   }
-
-  // 2. Try VITE_KEY (In case user named it this way)
+  // 2. Try User Custom Name
   // @ts-ignore
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
-    console.log("✅ Found VITE_KEY");
+  else if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
     // @ts-ignore
-    return import.meta.env.VITE_KEY;
+    key = import.meta.env.VITE_KEY;
+  }
+  // 3. Try Next.js Public
+  else if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    key = process.env.NEXT_PUBLIC_API_KEY || '';
+  }
+  // 4. Try Process Env
+  else if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    key = process.env.API_KEY || '';
   }
 
-  // 3. Try Next.js Public (Standard Vercel System Env)
-  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
-    console.log("✅ Found NEXT_PUBLIC_API_KEY");
-    return process.env.NEXT_PUBLIC_API_KEY;
-  }
+  // VALIDATION
+  if (!key) return undefined;
+  
+  // Trim whitespace
+  key = key.trim();
 
-  // 4. Try Standard Process Env
-  if (typeof process !== 'undefined' && process.env?.API_KEY) {
-    console.log("✅ Found API_KEY (Process)");
-    return process.env.API_KEY;
-  }
-
-  console.error("❌ API Key Missing. Please add VITE_API_KEY to Vercel Environment Variables and REDEPLOY.");
-  return undefined;
+  return key;
 };
 
-// COMPRESSION: 
-// Resize to 512px. This is crucial for Vercel timeouts.
+// Image optimization for API payload
 const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -48,13 +52,10 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
       const canvas = document.createElement('canvas');
       let width = img.width;
       let height = img.height;
-
-      // Keep aspect ratio
       if (width > maxWidth) {
         height *= maxWidth / width;
         width = maxWidth;
       }
-
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
@@ -62,7 +63,6 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        // Quality 0.6 is optimal 
         resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
@@ -72,40 +72,26 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
   });
 };
 
-// --- BATTLE-TESTED MODEL STRATEGY ---
-const FALLBACK_MODELS = [
-    'gemini-1.5-pro',        // 1. BEST QUALITY (Often hits limits on Free Tier)
-    'gemini-1.5-flash',      // 2. STANDARD FALLBACK (Faster, reliable)
-    'gemini-1.5-flash-8b',   // 3. ULTIMATE SAFETY NET (Highest limits, almost never fails)
-    'gemini-2.0-flash-exp'   // 4. EXPERIMENTAL (Good if others fail completely)
-];
-
 const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
-  const languageDirective = lang === 'tr' 
-    ? "YANIT DİLİ: TÜRKÇE. JSON formatında yanıtla." 
-    : "RESPONSE LANGUAGE: ENGLISH. Return JSON.";
-
-  const baseJsonInstruction = `
-    STRICT JSON OUTPUT ONLY. DO NOT USE MARKDOWN BLOCK.
-    Structure:
+  const langInst = lang === 'tr' ? "OUTPUT: TURKISH LANGUAGE." : "OUTPUT: ENGLISH LANGUAGE.";
+  
+  return `
+    ROLE: Advanced Biometric AI.
+    TASK: Analyze the face and compare with historical/celebrity database.
+    ${langInst}
+    MODE: ${mode}
+    STYLE: ${style === AnalysisStyle.ROAST ? 'Roast/Funny/Savage' : 'Scientific/Professional'}
+    
+    RETURN JSON ONLY. NO MARKDOWN.
+    Format:
     {
       "metrics": { "cheekbones": "string", "eyes": "string", "jawline": "string" },
-      "mainMatch": { "name": "string", "percentage": "number(70-99)", "reason": "string" },
+      "mainMatch": { "name": "string", "percentage": "number", "reason": "string" },
       "alternatives": [ { "name": "string", "percentage": "string" }, { "name": "string", "percentage": "string" } ],
       "attributes": { "intelligence": 0-100, "dominance": 0-100, "creativity": 0-100, "resilience": 0-100, "charisma": 0-100 },
       "soulSignature": "string"
     }
   `;
-
-  const selectedTone = style === AnalysisStyle.ROAST 
-    ? "ROLE: Roast Master. TONE: Savage, funny. Mock the user's facial features." 
-    : "ROLE: Biometric Scientist. TONE: Clinical, precise, detailed.";
-
-  let task = "Analyze face biometric matches.";
-  if (mode === AnalysisMode.PAST_LIFE) task = "Analyze past life reincarnation.";
-  if (mode === AnalysisMode.CYBER_ARCHETYPE) task = "Analyze cyberpunk character class.";
-
-  return `${task} ${selectedTone} ${languageDirective} ${baseJsonInstruction}`;
 };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -113,106 +99,103 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
+  // 1. Check Key Existence
   if (!apiKey) {
+    console.error("❌ API Key is missing completely.");
     throw new Error(lang === 'tr' 
-        ? "API Anahtarı bulunamadı. Lütfen Vercel ayarlarından 'VITE_API_KEY' ekleyin ve projeyi REDEPLOY edin." 
-        : "API Key missing. Add 'VITE_API_KEY' in Vercel and REDEPLOY.");
+      ? "API Anahtarı Bulunamadı. Vercel ayarlarında VITE_API_KEY tanımlı değil." 
+      : "API Key Not Found. Check Vercel Environment Variables.");
+  }
+
+  // 2. Check Key Format (Google keys start with AIza)
+  if (!apiKey.startsWith("AIza")) {
+    console.error("❌ API Key seems invalid (Does not start with AIza).");
+    throw new Error(lang === 'tr'
+      ? `Geçersiz API Anahtarı Formatı. Anahtar '${apiKey.substring(0, 4)}...' ile başlıyor. 'AIza' ile başlamalı.`
+      : "Invalid API Key format. Must start with AIza.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
-  
-  // 1. Aggressive Compression
   const resizedBase64 = await resizeImage(base64Image);
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
-
-  let lastError: any = null;
   const instruction = getSystemInstruction(mode, style, lang);
 
-  // 2. Loop through models with increasing desperation
-  for (const modelName of FALLBACK_MODELS) {
+  let lastError: any = null;
+  let success = false;
+  let resultJSON: any = null;
+
+  // 3. Attempt Models Sequence
+  for (const modelName of MODELS) {
+    if (success) break;
+    
     try {
-        console.log(`📡 Trying Model: ${modelName}`);
-        
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: {
-                parts: [
-                    { text: "Analyze face. JSON only." },
-                    { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }
-                ]
-            },
-            config: {
-                systemInstruction: instruction,
-                responseMimeType: "application/json",
-                // Disable safety filters
-                safetySettings: [
-                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-                ]
-            }
-        });
+      console.log(`📡 Connecting to: ${modelName}`);
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            { text: "Analyze this face. Return strictly JSON." },
+            { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }
+          ]
+        },
+        config: {
+          systemInstruction: instruction,
+          responseMimeType: "application/json",
+          safetySettings: [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+          ]
+        }
+      });
 
-        const text = response.text;
-        if (!text) throw new Error("Empty response");
-
+      const text = response.text;
+      if (text) {
         const cleanText = text.replace(/```json|```/g, '').trim();
-        const json = JSON.parse(cleanText);
-
-        if (!json.mainMatch) throw new Error("Invalid JSON");
-
-        return json as AnalysisReport;
-
-    } catch (error: any) {
-        lastError = error;
-        const msg = error.message || "";
-        console.warn(`❌ ${modelName} Failed:`, msg);
-        
-        // INTELLIGENT RETRY LOGIC
-        if (msg.includes("429") || msg.includes("503") || msg.includes("overloaded")) {
-            // If Pro fails, Flash-8b usually works immediately. 
-            // We wait 1 second to clear the socket.
-            await wait(1000);
-            continue; 
+        resultJSON = JSON.parse(cleanText);
+        if (resultJSON.mainMatch) {
+            success = true;
+            console.log(`✅ Success with ${modelName}`);
         }
-        
-        // Network errors or 404s -> Try next immediately
-        if (msg.includes("NetworkError") || msg.includes("fetch") || msg.includes("404")) {
-            continue;
-        }
-
-        // Safety blocks -> Try next
-        if (msg.includes("SAFETY") || msg.includes("candidate")) {
-            continue;
-        }
+      }
+    } catch (e: any) {
+      console.warn(`⚠️ ${modelName} Failed:`, e.message);
+      lastError = e;
+      
+      // If error is 429 (Quota), wait 1s and try next model
+      if (e.message?.includes('429')) {
+        await wait(1000);
+      }
     }
   }
 
-  // 3. Final Error Handling
-  console.error("Fatal Error:", lastError);
-  const rawMessage = lastError?.message || JSON.stringify(lastError);
-
-  let userMessage = "";
-
-  if (rawMessage.includes("API key") || rawMessage.includes("403")) {
-      userMessage = lang === 'tr' 
-        ? "⚠️ API ANAHTARI GEÇERSİZ: Vercel'de 'VITE_API_KEY' adıyla eklediğinizden emin olun ve projeyi Redeploy edin." 
-        : "⚠️ INVALID API KEY: Check Vercel Env Vars & Redeploy.";
-  } else if (rawMessage.includes("429")) {
-      // If even Flash-8b fails with 429, the IP is truly cooked.
-      userMessage = lang === 'tr' 
-        ? "⚠️ TRAFİK ÇOK YOĞUN: Google sunucuları şu an yanıt vermiyor. Lütfen 2 dakika sonra tekrar deneyin." 
-        : "⚠️ TRAFFIC OVERLOAD: Please wait 2 minutes.";
-  } else if (rawMessage.includes("SAFETY")) {
-      userMessage = lang === 'tr'
-        ? "⚠️ GÜVENLİK FİLTRESİ: Fotoğraf analiz edilemedi."
-        : "⚠️ SAFETY BLOCK: Image rejected.";
-  } else {
-       userMessage = lang === 'tr' 
-        ? "⚠️ BAĞLANTI HATASI: VPN açıksa kapatın." 
-        : "⚠️ CONNECTION ERROR: Check VPN/Internet.";
+  if (success && resultJSON) {
+    return resultJSON as AnalysisReport;
   }
 
-  throw new Error(userMessage);
+  // 4. Error Translation
+  const errStr = lastError?.message || JSON.stringify(lastError);
+  console.error("🔥 FATAL ERROR:", errStr);
+
+  if (errStr.includes('403') || errStr.includes('API key not valid')) {
+      throw new Error(lang === 'tr' 
+        ? "⚠️ ERİŞİM REDDEDİLDİ (403): API Anahtarı hatalı veya Vercel domainine (referrer) izin verilmemiş. Google AI Studio'da 'API Key Restrictions' ayarını kontrol et." 
+        : "⚠️ ACCESS DENIED (403): Check Domain Restrictions in Google AI Studio.");
+  }
+  
+  if (errStr.includes('429')) {
+      throw new Error(lang === 'tr'
+        ? "⚠️ KOTA DOLDU (429): Ücretsiz tarama limitine takıldınız. 2 dakika bekleyin."
+        : "⚠️ RATE LIMIT (429): Quota exceeded. Wait 2 mins.");
+  }
+
+  if (errStr.includes('SAFETY') || errStr.includes('candidate')) {
+       throw new Error(lang === 'tr'
+        ? "⚠️ GÜVENLİK PROTOKOLÜ: Bu görsel analiz edilemedi (Safety Filter)."
+        : "⚠️ SAFETY BLOCK: Image rejected by AI filter.");
+  }
+
+  // Generic Fallback
+  throw new Error(`SYSTEM FAILURE: ${errStr.substring(0, 50)}...`);
 };
