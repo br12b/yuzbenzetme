@@ -1,94 +1,135 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
-import { AnalysisReport } from "../types";
+import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // Helper to safely get API key in various environments
 const getApiKey = () => {
-  // 1. Try Vite Standard
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
     // @ts-ignore
     return import.meta.env.VITE_API_KEY;
   }
-
-  // 2. Try Next.js Standard
   if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
     return process.env.NEXT_PUBLIC_API_KEY;
   }
-
-  // 3. Try Generic/Node
   if (typeof process !== 'undefined' && process.env?.API_KEY) {
     return process.env.API_KEY;
   }
-  
   return undefined;
 };
 
-// Modeller listesi (Sırayla denenecek)
-// Birinin kotası dolarsa diğerine geçer.
 const FALLBACK_MODELS = [
     'gemini-3-flash-preview',
     'gemini-2.5-flash-latest', 
 ];
 
-const SYSTEM_INSTRUCTION = `
-Sen "Global Heritage & Biometric Matcher" isimli üst düzey biyometrik analiz sistemisin.
+// --- DYNAMIC SYSTEM INSTRUCTIONS ---
+const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: Language) => {
+  const languageDirective = lang === 'tr' 
+    ? "Tüm yanıtlarını ve analizlerini TÜRKÇE olarak ver." 
+    : "Provide all responses and analyses in ENGLISH.";
 
-GÖREVİN:
-Kullanıcının yüzünü analiz ederek, dünya üzerindeki **TÜM ÜNLÜ YÜZLER** (Modern Oyuncular, Şarkıcılar, Sporcular, Modeller veya Tarihi Figürler) arasından en yüksek biyometrik eşleşmeyi bulmak.
+  const baseJsonInstruction = `
+    Response Format (JSON):
+    Your response must STRICTLY follow this JSON schema. Do not add any other text.
+    {
+      "metrics": { "cheekbones": "...", "eyes": "...", "jawline": "..." },
+      "mainMatch": { "name": "...", "percentage": "90-99", "reason": "..." },
+      "alternatives": [ { "name": "...", "percentage": "..." }, { "name": "...", "percentage": "..." } ],
+      "attributes": { "intelligence": 0-100, "dominance": 0-100, "creativity": 0-100, "resilience": 0-100, "charisma": 0-100 },
+      "soulSignature": "..."
+    }
+  `;
 
-KURALLAR:
-1. **KİMLİK TESPİTİ SERBEST VE ÖNCELİKLİ:** Eğer yüklenen fotoğraf günümüzün popüler bir ismine (örn: Kıvanç Tatlıtuğ, Scarlett Johansson, Ronaldo) benziyorsa, direkt olarak o ismi ver. Tarihsel zorlama yapma. En yüksek benzerlik kimse o çıkmalı.
-2. **KAPSAM:** Hollywood yıldızları, Yeşilçam oyuncuları, dünya liderleri, sporcular ve tarihi şahsiyetlerin hepsi tarama havuzunda olsun.
-3. **BİLİMSEL VE ETKİLEYİCİ DİL:** Sonucu sunarken "Tıpkı ona benziyorsun" gibi basit cümleler kurma. Şöyle de: "Yüz hatlarınızdaki altın oran ve orbital kemik yapısı, %96 oranında [İSİM] ile biyometrik eşleşme göstermektedir."
+  // --- STYLE MODIFIERS ---
+  const scientificTone = `
+    TONE: Highly professional, biometric, scientific, cold, slightly futuristic. 
+    Use terms like "craniofacial structure", "canthal tilt", "zygomatic arch", "phenotype". 
+    The "Soul Signature" should read like a psychological dossier from a dystopian government.
+  `;
 
-Cevap Formatın (JSON):
-Yanıtın kesinlikle aşağıdaki JSON şemasına uygun olmalıdır. Başka hiçbir metin ekleme.
+  const roastTone = `
+    TONE: Savage, funny, internet slang, "roast" style, edgy (but not bannable). 
+    Use terms like "negative canthal tilt", "looks like they trade crypto", "main character energy". 
+    The "Soul Signature" must be a funny, meme-worthy personality read.
+  `;
 
-{
-  "metrics": {
-    "cheekbones": "Örn: Yüksek ve Belirgin (Model Tipi)",
-    "eyes": "Örn: Badem formlu, yoğun bakışlı",
-    "jawline": "Örn: Keskin ve Simetrik"
-  },
-  "mainMatch": {
-    "name": "Eşleşen Ünlü/Kişi Adı",
-    "percentage": "90-99 arası bir sayı",
-    "reason": "Yüzün hangi spesifik özelliklerinin (burun kemeri, dudak yapısı vb.) bu kişiyle eşleştiğini açıklayan teknik bir cümle."
-  },
-  "alternatives": [
-    { "name": "Alternatif Ünlü 1", "percentage": "85" },
-    { "name": "Alternatif Ünlü 2", "percentage": "82" }
-  ],
-  "soulSignature": "Kişinin yüz hatlarından yola çıkarak karakteri (lider, sanatçı, duygusal vb.) hakkında kısa, etkileyici bir analiz."
-}
-`;
+  const selectedTone = style === AnalysisStyle.ROAST ? roastTone : scientificTone;
+
+  if (mode === AnalysisMode.PAST_LIFE) {
+    return `
+      You are "Chrono-Metric Time Traveler" system.
+      TASK: Analyze the user's facial features to find their "Past Life" (Reincarnation).
+      ${selectedTone}
+      ${languageDirective}
+      
+      RULES:
+      1. Match with historical figures (kings, peasants, warriors, weird inventors).
+      2. "Reason": Explain why based on facial features.
+      3. "Soul Signature": Describe how they died or lived in the past life.
+      
+      ${baseJsonInstruction}
+    `;
+  }
+
+  if (mode === AnalysisMode.CYBER_ARCHETYPE) {
+    return `
+      You are "Night City Neural Net".
+      TASK: Scan the user's face to determine their Dystopian/Cyberpunk role.
+      ${selectedTone}
+      ${languageDirective}
+      
+      RULES:
+      1. Give roles like "Corpo Rat", "Street Samurai", "Ripperdoc", "Fixer".
+      2. "Metrics": Describe the face as if scanning for cyber-implants.
+      3. "Soul Signature": Describe their survival rating in a cyberpunk city.
+      
+      ${baseJsonInstruction}
+    `;
+  }
+
+  // DEFAULT: HERITAGE MODE
+  return `
+    You are "Global Heritage & Biometric Matcher".
+    TASK: Analyze the user's face to find the best celebrity or historical match.
+    ${selectedTone}
+    ${languageDirective}
+    
+    RULES:
+    1. Match with celebrities, historical figures, or meme icons.
+    2. "Reason": Connect specific facial features to the match.
+    3. "Soul Signature": A deep personality analysis based on physiognomy.
+    
+    ${baseJsonInstruction}
+  `;
+};
+
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export const analyzeImage = async (base64Image: string): Promise<AnalysisReport> => {
+export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    console.error("API Key Missing! Checked: VITE_API_KEY, NEXT_PUBLIC_API_KEY, API_KEY");
-    throw new Error("API Anahtarı bulunamadı. Vercel ayarlarında 'VITE_API_KEY' girildiğinden emin olun.");
+    throw new Error(lang === 'tr' ? "API Anahtarı bulunamadı." : "API Key not found.");
   }
 
   const ai = new GoogleGenAI({ apiKey: apiKey });
   const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
   let lastError: any = null;
+  const instruction = getSystemInstruction(mode, style, lang);
 
-  // Akıllı Model Deneme Döngüsü
   for (const modelName of FALLBACK_MODELS) {
     try {
-        console.log(`Trying model: ${modelName}...`);
+        console.log(`Trying model: ${modelName} with mode: ${mode}, style: ${style}...`);
         
         const response = await ai.models.generateContent({
             model: modelName,
             contents: {
                 parts: [
                 {
-                    text: "Fotoğrafı analiz et. Modern ünlü, oyuncu veya tarihi figür fark etmeksizin EN ÇOK BENZEYEN kişiyi bul ve JSON raporu oluştur."
+                    text: `Analyze this face. Mode: ${mode}. Style: ${style}. Language: ${lang}. Return JSON.`
                 },
                 {
                     inlineData: {
@@ -99,7 +140,7 @@ export const analyzeImage = async (base64Image: string): Promise<AnalysisReport>
                 ]
             },
             config: {
-                systemInstruction: SYSTEM_INSTRUCTION,
+                systemInstruction: instruction,
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -133,9 +174,20 @@ export const analyzeImage = async (base64Image: string): Promise<AnalysisReport>
                                 required: ["name", "percentage"]
                             }
                         },
+                        attributes: {
+                           type: Type.OBJECT,
+                           properties: {
+                               intelligence: { type: Type.NUMBER },
+                               dominance: { type: Type.NUMBER },
+                               creativity: { type: Type.NUMBER },
+                               resilience: { type: Type.NUMBER },
+                               charisma: { type: Type.NUMBER }
+                           },
+                           required: ["intelligence", "dominance", "creativity", "resilience", "charisma"]
+                        },
                         soulSignature: { type: Type.STRING }
                     },
-                    required: ["metrics", "mainMatch", "alternatives", "soulSignature"]
+                    required: ["metrics", "mainMatch", "alternatives", "soulSignature", "attributes"]
                 }
             }
         });
@@ -150,32 +202,29 @@ export const analyzeImage = async (base64Image: string): Promise<AnalysisReport>
         lastError = error;
         const msg = error.message || "";
         
-        // Eğer hata 429 (Rate Limit) veya 503 (Overloaded) ise diğer modele geç
         if (msg.includes("429") || msg.includes("quota") || msg.includes("503") || msg.includes("RESOURCE_EXHAUSTED")) {
-            console.warn(`Model ${modelName} dolu, sıradaki modele geçiliyor...`);
-            await wait(1500); // Kısa bir bekleme
-            continue; // Döngüye devam et (sonraki model)
+            console.warn(`Model ${modelName} busy, retrying...`);
+            await wait(1500);
+            continue; 
         }
-        
-        // Başka bir hataysa (örn: API Key hatalı), döngüyü kır ve hatayı fırlat
         break; 
     }
   }
 
-  // Eğer tüm modeller başarısız olursa buraya düşer
   console.error("All models failed:", lastError);
-  
   let errorMessage = "Bilinmeyen sunucu hatası.";
   const rawMessage = lastError?.message || JSON.stringify(lastError);
 
   if (rawMessage.includes("429") || rawMessage.includes("quota")) {
       const waitMatch = rawMessage.match(/retry in ([\d\.]+)s/);
       const seconds = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) : 30;
-      errorMessage = `⚠️ SİSTEM AŞIRI YOĞUN. Lütfen ${seconds} saniye bekleyip tekrar deneyin.`;
-  } else if (rawMessage.includes("403") || rawMessage.includes("key")) {
-      errorMessage = "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz.";
+      errorMessage = lang === 'tr' 
+        ? `⚠️ SİSTEM AŞIRI YOĞUN. Lütfen ${seconds} saniye bekleyip tekrar deneyin.`
+        : `⚠️ SYSTEM OVERLOAD. Please wait ${seconds} seconds and retry.`;
   } else {
-      errorMessage = "⚠️ BAĞLANTI HATASI: Lütfen tekrar deneyin.";
+      errorMessage = rawMessage.includes("403") 
+        ? (lang === 'tr' ? "⚠️ YETKİLENDİRME HATASI: API Anahtarı geçersiz." : "⚠️ AUTH ERROR: Invalid API Key.") 
+        : (lang === 'tr' ? "⚠️ BAĞLANTI HATASI: Lütfen tekrar deneyin." : "⚠️ CONNECTION ERROR: Please retry.");
   }
 
   throw new Error(errorMessage);
