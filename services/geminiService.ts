@@ -2,11 +2,17 @@
 import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
-// --- CONFIGURATION ---
-// STRICT MODE: Only use the model with the HIGHEST FREE TIER QUOTA.
-// 'gemini-1.5-flash' allows ~15 RPM (Requests Per Minute) on free tier.
-// Others (Pro, Exp) allow only 2 RPM, causing immediate 429 errors.
-const MODEL_NAME = 'gemini-1.5-flash';
+// --- ROBUST MODEL STRATEGY ---
+// We try these models in order. If one fails (404 Not Found, 429 Rate Limit), 
+// we automatically switch to the next one.
+const MODELS_TO_TRY = [
+    'gemini-2.0-flash-exp',     // 1. Newest, often has separate experimental quota
+    'gemini-1.5-flash',         // 2. Standard Flash
+    'gemini-1.5-flash-latest',  // 3. Alias
+    'gemini-1.5-flash-001',     // 4. Stable Version
+    'gemini-1.5-flash-8b',      // 5. Lightweight/Fast
+    'gemini-1.5-pro'            // 6. High Intelligence Fallback
+];
 
 const getApiKey = () => {
   let key = '';
@@ -102,43 +108,6 @@ const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: La
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- RETRY LOGIC WRAPPER ---
-// This ensures we don't give up immediately on 429/503 errors.
-async function callApiWithRetry(ai: GoogleGenAI, params: any, maxRetries = 3) {
-    let attempt = 0;
-    
-    while (attempt < maxRetries) {
-        try {
-            console.log(`📡 API Attempt ${attempt + 1}/${maxRetries}...`);
-            const result = await ai.models.generateContent(params);
-            return result;
-        } catch (error: any) {
-            attempt++;
-            const msg = error.message || '';
-            
-            // Critical errors that shouldn't be retried
-            if (msg.includes('API key') || msg.includes('403')) {
-                throw error;
-            }
-
-            // If it's the last attempt, throw
-            if (attempt >= maxRetries) {
-                console.error("🔥 All retries failed.");
-                throw error;
-            }
-
-            // Rate Limit (429) or Server Error (503/500) -> WAIT AND RETRY
-            if (msg.includes('429') || msg.includes('503') || msg.includes('500') || msg.includes('fetch')) {
-                console.warn(`⚠️ API Busy (429/503). Waiting ${attempt * 2}s before retry...`);
-                await wait(2000 * attempt); // Exponential backoff: 2s, 4s, 6s...
-                continue;
-            }
-
-            throw error;
-        }
-    }
-}
-
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
 
@@ -156,9 +125,15 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   
   const instruction = getSystemInstruction(mode, style, lang);
 
-  try {
-      const response = await callApiWithRetry(ai, {
-        model: MODEL_NAME,
+  let lastError: any = null;
+
+  // --- MULTI-MODEL CASCADE LOOP ---
+  for (const modelName of MODELS_TO_TRY) {
+    try {
+      console.log(`📡 Connecting to Neural Core: ${modelName}...`);
+      
+      const response = await ai.models.generateContent({
+        model: modelName,
         contents: {
           parts: [
             { text: "Analyze face. Return strictly JSON." },
@@ -178,23 +153,40 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
       const cleanText = text.replace(/```json|```/g, '').trim();
       const json = JSON.parse(cleanText);
 
+      console.log(`✅ Success with ${modelName}`);
       return json as AnalysisReport;
 
-  } catch (error: any) {
-      console.error("Gemini Service Error:", error);
-      const errStr = error.message || "Unknown error";
+    } catch (error: any) {
+      const msg = error.message || '';
+      console.warn(`⚠️ Model ${modelName} Failed:`, msg);
+      lastError = error;
 
-      if (errStr.includes('429')) {
-          throw new Error(lang === 'tr' 
-            ? "⚠️ Sunucu çok yoğun. Lütfen 1 dakika bekleyip tekrar deneyin. (Quota Exceeded)" 
-            : "⚠️ Server busy (Quota Exceeded). Please wait 1 min.");
-      }
-      if (errStr.includes('SAFETY')) {
-          throw new Error(lang === 'tr'
-            ? "⚠️ Görsel güvenlik filtresine takıldı. Başka bir fotoğraf deneyin."
-            : "⚠️ Safety Filter triggered. Try another photo.");
+      // Logic: If error is 404 (Not Found) or 429 (Busy) or 503 (Server Error), 
+      // we CONTINUE to the next model in the list.
+      if (msg.includes('404') || msg.includes('429') || msg.includes('503') || msg.includes('not found') || msg.includes('fetch')) {
+         await wait(500); // Brief pause before next attempt
+         continue; 
       }
       
-      throw new Error(lang === 'tr' ? "Bağlantı Hatası: " + errStr : "Connection Error: " + errStr);
+      // If error is about API Key (400/403), no point trying other models
+      if (msg.includes('API key') || msg.includes('403')) {
+          break;
+      }
+    }
   }
+
+  // If we reach here, ALL models failed.
+  console.error("🔥 All models failed.", lastError);
+  
+  const errStr = lastError?.message || "Unknown Error";
+  
+  if (errStr.includes('SAFETY')) {
+      throw new Error(lang === 'tr'
+        ? "⚠️ Görsel güvenlik filtresine takıldı. Başka bir fotoğraf deneyin."
+        : "⚠️ Safety Filter triggered. Try another photo.");
+  }
+
+  throw new Error(lang === 'tr' 
+    ? `Bağlantı Kurulamadı: Uygun model bulunamadı. (${errStr.substring(0, 30)}...)` 
+    : `Connection Failed: No available models. (${errStr.substring(0, 30)}...)`);
 };
