@@ -1,45 +1,35 @@
 
-import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
-// --- ROBUST MODEL STRATEGY ---
-// Bu liste en yeniden en eskiye, en güçlüden en hızlıya doğru sıralanmıştır.
-// Sistem sırayla dener, 404 (Bulunamadı) veya 429 (Kota) alırsa bir sonrakine geçer.
-const MODELS_TO_TRY = [
-    'gemini-2.0-flash-exp',     // 1. En yeni, en yetenekli (Genelde ücretsiz kotası ayrıdır)
-    'gemini-1.5-flash-002',     // 2. Flash'ın en güncel kararlı sürümü
-    'gemini-1.5-flash-8b',      // 3. Çok hızlı ve hafif sürüm (Düşük maliyet/kota dostu)
-    'gemini-1.5-flash',         // 4. Standart Alias (Bazen 404 verebilir, yedek olarak kalsın)
-    'gemini-1.5-flash-001',     // 5. Eski kararlı sürüm (Çok güvenilir)
-    'gemini-1.5-pro-002',       // 6. Pro model (Kota sıkıntısı olabilir ama çok zekidir)
-    'gemini-pro'                // 7. Legacy (Eski) model
-];
+// --- CONSTANTS ---
+// We use the direct REST API endpoint to avoid SDK version mismatches.
+// gemini-1.5-flash is the most stable model for free tier.
+const API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+const PRIMARY_MODEL = "gemini-1.5-flash";
+const BACKUP_MODEL = "gemini-1.5-flash-8b";
 
 const getApiKey = () => {
-  let key = '';
-
   // 1. Try Vite (Client-side standard)
   // @ts-ignore
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
     // @ts-ignore
-    key = import.meta.env.VITE_API_KEY;
+    return import.meta.env.VITE_API_KEY;
   }
   // 2. Try User Custom Name
   // @ts-ignore
-  else if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
     // @ts-ignore
-    key = import.meta.env.VITE_KEY;
+    return import.meta.env.VITE_KEY;
   }
   // 3. Try Next.js Public
-  else if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
-    key = process.env.NEXT_PUBLIC_API_KEY || '';
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    return process.env.NEXT_PUBLIC_API_KEY;
   }
   // 4. Try Process Env
-  else if (typeof process !== 'undefined' && process.env?.API_KEY) {
-    key = process.env.API_KEY || '';
+  if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    return process.env.API_KEY;
   }
-
-  return key?.trim();
+  return '';
 };
 
 const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
@@ -58,11 +48,9 @@ const resizeImage = (base64Str: string, maxWidth = 512): Promise<string> => {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // High contrast background helps detection
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        // Reduce quality slightly to speed up upload
         resolve(canvas.toDataURL('image/jpeg', 0.6)); 
       } else {
         resolve(base64Str);
@@ -107,7 +95,25 @@ const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: La
   `;
 };
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// --- DIRECT FETCH FUNCTION ---
+async function callGeminiRest(modelName: string, apiKey: string, payload: any) {
+    const url = `${API_BASE_URL}/${modelName}:generateContent?key=${apiKey}`;
+    
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `HTTP Error: ${response.status}`);
+    }
+
+    return await response.json();
+}
 
 export const analyzeImage = async (base64Image: string, mode: AnalysisMode, style: AnalysisStyle, lang: Language): Promise<AnalysisReport> => {
   const apiKey = getApiKey();
@@ -118,87 +124,69 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
       : "API Key Missing. Check configuration.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: apiKey });
-  
   // Clean base64 string
   const resizedBase64 = await resizeImage(base64Image);
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
   
   const instruction = getSystemInstruction(mode, style, lang);
 
-  let lastError: any = null;
-
-  // --- MULTI-MODEL CASCADE LOOP ---
-  for (const modelName of MODELS_TO_TRY) {
-    try {
-      console.log(`📡 Connecting to Neural Core: ${modelName}...`);
-      
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: {
+  // Prepare Payload for REST API
+  const payload = {
+      system_instruction: {
+          parts: [{ text: instruction }]
+      },
+      contents: [{
           parts: [
-            { text: "Analyze face. Return strictly JSON." },
-            { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }
+              { text: "Analyze this face and return the JSON report." },
+              { 
+                  inline_data: { 
+                      mime_type: "image/jpeg", 
+                      data: cleanBase64 
+                  } 
+              }
           ]
-        },
-        config: {
-          systemInstruction: instruction,
-          responseMimeType: "application/json"
-        }
-      });
+      }],
+      generationConfig: {
+          response_mime_type: "application/json"
+      }
+  };
 
-      const text = response.text;
+  try {
+      console.log(`📡 Connecting via REST API to ${PRIMARY_MODEL}...`);
+      const data = await callGeminiRest(PRIMARY_MODEL, apiKey, payload);
+      
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error("Empty response from AI");
 
-      // Clean markdown if AI adds it despite instructions
       const cleanText = text.replace(/```json|```/g, '').trim();
+      return JSON.parse(cleanText) as AnalysisReport;
+
+  } catch (error: any) {
+      console.warn(`⚠️ Primary Model Failed: ${error.message}. Trying Backup...`);
       
+      // Retry with Backup Model if primary fails
       try {
-          const json = JSON.parse(cleanText);
-          console.log(`✅ Success with ${modelName}`);
-          return json as AnalysisReport;
-      } catch (parseError) {
-          console.warn(`⚠️ JSON Parse Error on ${modelName}:`, cleanText);
-          throw new Error("Invalid JSON format");
+           const data = await callGeminiRest(BACKUP_MODEL, apiKey, payload);
+           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+           if (!text) throw new Error("Empty response from Backup AI");
+           
+           const cleanText = text.replace(/```json|```/g, '').trim();
+           return JSON.parse(cleanText) as AnalysisReport;
+      } catch (backupError: any) {
+           console.error("🔥 All attempts failed.", backupError);
+           
+           const errStr = backupError.message || "Unknown error";
+           if (errStr.includes('429')) {
+               throw new Error(lang === 'tr' ? "Sunucu yoğun (Kota Doldu). Lütfen 1 dakika bekleyin." : "Server busy (Quota Exceeded). Wait 1 min.");
+           }
+           if (errStr.includes('400')) {
+                throw new Error(lang === 'tr' ? "Geçersiz İstek (Bad Request). Görsel formatını kontrol edin." : "Bad Request. Check image format.");
+           }
+           if (errStr.includes('403')) {
+                throw new Error(lang === 'tr' ? "Yetkisiz Erişim (403). API Anahtarınızı kontrol edin." : "Access Denied (403). Check API Key.");
+           }
+           
+           throw new Error(lang === 'tr' ? `Bağlantı Hatası: ${errStr}` : `Connection Error: ${errStr}`);
       }
-
-    } catch (error: any) {
-      const msg = error.message || '';
-      // Bazı durumlarda status code error objesinin içinde 'status' veya 'code' olarak gelir
-      const status = error.status || error.code || 0;
-      
-      console.warn(`⚠️ Model ${modelName} Failed:`, msg);
-      lastError = error;
-
-      // HATA YÖNETİMİ: Aşağıdaki durumlarda pes etme, diğer modele geç.
-      // 404: Model Bulunamadı
-      // 429: Kota Doldu
-      // 503: Sunucu Meşgul
-      // 'not found', 'fetch': Genel ağ hataları
-      if (status === 404 || status === 429 || status === 503 || msg.includes('404') || msg.includes('429') || msg.includes('503') || msg.includes('not found') || msg.includes('fetch')) {
-         await wait(500); // Kısa bir bekleme
-         continue; 
-      }
-      
-      // API Key hatalıysa (400, 403) denemeye devam etmenin anlamı yok.
-      if (msg.includes('API key') || msg.includes('403')) {
-          break;
-      }
-    }
   }
-
-  // Buraya geldiysek HİÇBİR model çalışmadı demektir.
-  console.error("🔥 All models failed.", lastError);
-  
-  const errStr = lastError?.message || "Unknown Error";
-  
-  if (errStr.includes('SAFETY')) {
-      throw new Error(lang === 'tr'
-        ? "⚠️ Görsel güvenlik filtresine takıldı. Başka bir fotoğraf deneyin."
-        : "⚠️ Safety Filter triggered. Try another photo.");
-  }
-
-  throw new Error(lang === 'tr' 
-    ? `Bağlantı Kurulamadı: Uygun model bulunamadı veya sunucular meşgul. (${errStr.substring(0, 30)}...)` 
-    : `Connection Failed: No available models. (${errStr.substring(0, 30)}...)`);
 };
