@@ -3,15 +3,16 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
 // --- ROBUST MODEL STRATEGY ---
-// We try these models in order. If one fails (404 Not Found, 429 Rate Limit), 
-// we automatically switch to the next one.
+// Bu liste en yeniden en eskiye, en güçlüden en hızlıya doğru sıralanmıştır.
+// Sistem sırayla dener, 404 (Bulunamadı) veya 429 (Kota) alırsa bir sonrakine geçer.
 const MODELS_TO_TRY = [
-    'gemini-2.0-flash-exp',     // 1. Newest, often has separate experimental quota
-    'gemini-1.5-flash',         // 2. Standard Flash
-    'gemini-1.5-flash-latest',  // 3. Alias
-    'gemini-1.5-flash-001',     // 4. Stable Version
-    'gemini-1.5-flash-8b',      // 5. Lightweight/Fast
-    'gemini-1.5-pro'            // 6. High Intelligence Fallback
+    'gemini-2.0-flash-exp',     // 1. En yeni, en yetenekli (Genelde ücretsiz kotası ayrıdır)
+    'gemini-1.5-flash-002',     // 2. Flash'ın en güncel kararlı sürümü
+    'gemini-1.5-flash-8b',      // 3. Çok hızlı ve hafif sürüm (Düşük maliyet/kota dostu)
+    'gemini-1.5-flash',         // 4. Standart Alias (Bazen 404 verebilir, yedek olarak kalsın)
+    'gemini-1.5-flash-001',     // 5. Eski kararlı sürüm (Çok güvenilir)
+    'gemini-1.5-pro-002',       // 6. Pro model (Kota sıkıntısı olabilir ama çok zekidir)
+    'gemini-pro'                // 7. Legacy (Eski) model
 ];
 
 const getApiKey = () => {
@@ -151,31 +152,42 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
       // Clean markdown if AI adds it despite instructions
       const cleanText = text.replace(/```json|```/g, '').trim();
-      const json = JSON.parse(cleanText);
-
-      console.log(`✅ Success with ${modelName}`);
-      return json as AnalysisReport;
+      
+      try {
+          const json = JSON.parse(cleanText);
+          console.log(`✅ Success with ${modelName}`);
+          return json as AnalysisReport;
+      } catch (parseError) {
+          console.warn(`⚠️ JSON Parse Error on ${modelName}:`, cleanText);
+          throw new Error("Invalid JSON format");
+      }
 
     } catch (error: any) {
       const msg = error.message || '';
+      // Bazı durumlarda status code error objesinin içinde 'status' veya 'code' olarak gelir
+      const status = error.status || error.code || 0;
+      
       console.warn(`⚠️ Model ${modelName} Failed:`, msg);
       lastError = error;
 
-      // Logic: If error is 404 (Not Found) or 429 (Busy) or 503 (Server Error), 
-      // we CONTINUE to the next model in the list.
-      if (msg.includes('404') || msg.includes('429') || msg.includes('503') || msg.includes('not found') || msg.includes('fetch')) {
-         await wait(500); // Brief pause before next attempt
+      // HATA YÖNETİMİ: Aşağıdaki durumlarda pes etme, diğer modele geç.
+      // 404: Model Bulunamadı
+      // 429: Kota Doldu
+      // 503: Sunucu Meşgul
+      // 'not found', 'fetch': Genel ağ hataları
+      if (status === 404 || status === 429 || status === 503 || msg.includes('404') || msg.includes('429') || msg.includes('503') || msg.includes('not found') || msg.includes('fetch')) {
+         await wait(500); // Kısa bir bekleme
          continue; 
       }
       
-      // If error is about API Key (400/403), no point trying other models
+      // API Key hatalıysa (400, 403) denemeye devam etmenin anlamı yok.
       if (msg.includes('API key') || msg.includes('403')) {
           break;
       }
     }
   }
 
-  // If we reach here, ALL models failed.
+  // Buraya geldiysek HİÇBİR model çalışmadı demektir.
   console.error("🔥 All models failed.", lastError);
   
   const errStr = lastError?.message || "Unknown Error";
@@ -187,6 +199,6 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   }
 
   throw new Error(lang === 'tr' 
-    ? `Bağlantı Kurulamadı: Uygun model bulunamadı. (${errStr.substring(0, 30)}...)` 
+    ? `Bağlantı Kurulamadı: Uygun model bulunamadı veya sunucular meşgul. (${errStr.substring(0, 30)}...)` 
     : `Connection Failed: No available models. (${errStr.substring(0, 30)}...)`);
 };
