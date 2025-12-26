@@ -20,7 +20,6 @@ const TypewriterText: React.FC<{ text: string; speed?: number }> = ({ text, spee
     const [displayedText, setDisplayedText] = useState('');
     
     useEffect(() => {
-        if (!text) return;
         let index = 0;
         const interval = setInterval(() => {
             if (index < text.length) {
@@ -44,23 +43,16 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
 
   const t = translations[lang].result;
   
-  // Safety checks for radar data
-  const attributes = report.attributes || { intelligence: 50, dominance: 50, creativity: 50, resilience: 50, charisma: 50 };
-  
   const radarData = [
-      { subject: t.attributes.intelligence, A: attributes.intelligence, fullMark: 100 },
-      { subject: t.attributes.dominance, A: attributes.dominance, fullMark: 100 },
-      { subject: t.attributes.creativity, A: attributes.creativity, fullMark: 100 },
-      { subject: t.attributes.resilience, A: attributes.resilience, fullMark: 100 },
-      { subject: t.attributes.charisma, A: attributes.charisma, fullMark: 100 },
+      { subject: t.attributes.intelligence, A: report.attributes?.intelligence || 50, fullMark: 100 },
+      { subject: t.attributes.dominance, A: report.attributes?.dominance || 50, fullMark: 100 },
+      { subject: t.attributes.creativity, A: report.attributes?.creativity || 50, fullMark: 100 },
+      { subject: t.attributes.resilience, A: report.attributes?.resilience || 50, fullMark: 100 },
+      { subject: t.attributes.charisma, A: report.attributes?.charisma || 50, fullMark: 100 },
   ];
 
-  const mainMatchName = report.mainMatch?.name || "Unknown";
-  const mainMatchPercent = report.mainMatch?.percentage || "0";
-  const mainMatchReason = report.mainMatch?.reason || "Data corrupted.";
-
   const getShareText = () => {
-    return t.shareText.replace('{name}', mainMatchName).replace('{percent}', mainMatchPercent.toString());
+    return t.shareText.replace('{name}', report.mainMatch.name).replace('{percent}', report.mainMatch.percentage);
   };
 
   const handleShareWhatsApp = () => {
@@ -107,12 +99,12 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
             
             <div className="text-center w-full mt-4">
                 <div className="text-[10px] text-green-500/50 tracking-[0.3em] uppercase mb-1">{t.primaryMatch}</div>
-                <h3 className="text-3xl font-bold text-white mb-2 font-['Rajdhani']">{mainMatchName}</h3>
+                <h3 className="text-3xl font-bold text-white mb-2 font-['Rajdhani']">{report.mainMatch.name}</h3>
                 <div className="text-5xl font-bold text-green-500 my-2 drop-shadow-[0_0_10px_rgba(0,255,65,0.5)]">
-                    %{mainMatchPercent}
+                    %{report.mainMatch.percentage}
                 </div>
                 <p className="text-xs text-justify opacity-80 font-mono leading-relaxed mt-4">
-                    {mainMatchReason}
+                    {report.mainMatch.reason}
                 </p>
             </div>
           </div>
@@ -158,12 +150,12 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
                  </div>
 
                  <div className="mt-6 grid grid-cols-1 gap-2 relative z-10">
-                    {report.metrics && Object.entries(report.metrics).map(([key, value]) => (
+                    {Object.entries(report.metrics).map(([key, value]) => (
                         <div key={key} className="bg-black/40 p-2 border-l-2 border-green-500/50 hover:bg-green-900/20 transition-colors flex justify-between items-center" onMouseEnter={() => playSound.hover()}>
                              <span className="text-[9px] uppercase opacity-70">
                                 {getMetricLabel(key)}
                              </span>
-                             <span className="text-xs text-green-100 font-bold text-right pl-2">{String(value)}</span>
+                             <span className="text-xs text-green-100 font-bold text-right pl-2">{value}</span>
                         </div>
                     ))}
                  </div>
@@ -185,7 +177,7 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
                     <div className="absolute -left-3 top-0 bottom-0 w-[1px] bg-gradient-to-b from-green-500/50 to-transparent"></div>
                     
                     <span className="text-green-500 mr-2">&gt;&gt; {t.decipher}:</span>
-                    <TypewriterText text={report.soulSignature || "Signature not found."} speed={25} />
+                    <TypewriterText text={report.soulSignature} speed={25} />
                     <span className="animate-pulse inline-block w-2 h-4 bg-green-500 ml-1 align-middle"></span>
                 </div>
 
@@ -195,7 +187,7 @@ const Result: React.FC<ResultProps> = ({ report, userImage, onRestart, lang }) =
                         <span className="h-[1px] bg-green-500/30 flex-grow"></span>
                     </h5>
                     <div className="space-y-2">
-                        {report.alternatives && report.alternatives.map((alt, idx) => (
+                        {report.alternatives.map((alt, idx) => (
                             <div key={idx} className="flex justify-between items-center text-xs group cursor-default p-1 hover:bg-green-500/10 rounded" onMouseEnter={() => playSound.hover()}>
                                 <span className="text-white/80 group-hover:text-green-400 transition-colors">&gt; {alt.name}</span>
                                 <span className="font-bold text-green-500">%{alt.percentage}</span>
