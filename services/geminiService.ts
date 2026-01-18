@@ -2,37 +2,15 @@
 import { GoogleGenAI } from "@google/genai";
 import { AnalysisReport, AnalysisMode, AnalysisStyle, Language } from "../types";
 
-// Google Gemini Model
-const MODEL_NAME = "gemini-2.0-flash-exp"; 
+// En güncel ve hızlı model
+const MODEL_NAME = "gemini-3-flash-preview"; 
 
 const getApiKey = () => {
-  let key = '';
-  // 1. VITE_KEY 
-  try {
-    // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KEY) {
-      // @ts-ignore
-      return import.meta.env.VITE_KEY;
-    }
-  } catch (e) {}
-
-  // 2. Yedekler
-  try {
-    // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
-      // @ts-ignore
-      return import.meta.env.VITE_API_KEY;
-    }
-  } catch (e) {}
-
-  try {
-    if (typeof process !== 'undefined') {
-      if (process.env.NEXT_PUBLIC_API_KEY) return process.env.NEXT_PUBLIC_API_KEY;
-      if (process.env.API_KEY) return process.env.API_KEY;
-    }
-  } catch (e) {}
-
-  return key;
+  // @ts-ignore
+  const env = typeof import.meta !== 'undefined' ? import.meta.env : (typeof process !== 'undefined' ? process.env : {});
+  
+  // Vercel/Vite için VITE_KEY, genel kullanım için API_KEY
+  return env.VITE_KEY || env.VITE_API_KEY || env.API_KEY || env.NEXT_PUBLIC_API_KEY || '';
 };
 
 const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
@@ -52,7 +30,6 @@ const resizeImage = (base64Str: string, maxWidth = 800): Promise<string> => {
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(img, 0, 0, width, height);
-        // Gemini için optimize edilmiş JPEG
         resolve(canvas.toDataURL('image/jpeg', 0.8)); 
       } else {
         resolve(base64Str);
@@ -75,31 +52,31 @@ const getSystemInstruction = (mode: AnalysisMode, style: AnalysisStyle, lang: La
     ÜSLUP: ${style === AnalysisStyle.ROAST ? 'Mizahi, iğneleyici, hafif alaycı (Roast)' : 'Ciddi, Bilimsel, Teknik, Biyometrik'}
 
     ANALİZ SÜRECİN:
-    1. Görseli tarayarak şu metrikleri çıkar: Altın oran uyumu, göz mesafesi (interpupillary distance), elmacık kemiği hattı (malar line), çene yapısı (gonial angle) ve alın genişliği.
-    2. Bu verileri veritabanındaki (tarihi kişilikler ve ünlüler) binlerce profil ile eşleştir.
+    1. Görseli tarayarak şu metrikleri çıkar: Altın oran uyumu, göz mesafesi, elmacık kemiği hattı, çene yapısı ve alın genişliği.
+    2. Bu verileri dünya çapındaki (tarihi kişilikler ve ünlüler) veritabanı ile eşleştir.
     3. En yüksek (%) uyum sağlayan 1 ana karakter ve 2 benzer karakter belirle.
 
     KRİTİK KURALLAR:
-    - Asla "Sadece benziyorsun" deme. "Biyometrik verilerin şu sonuçları veriyor" diyerek teknik bir dil kullan.
-    - SADECE JSON formatında cevap ver. Markdown kullanma.
+    - Biyometrik verileri teknik terimlerle açıkla.
+    - SADECE JSON formatında cevap ver.
 
     İSTENEN JSON FORMATI:
     {
       "metrics": {
-        "cheekbones": "Elmacık kemiği analizi (örn: Belirgin ve Simetrik)",
-        "eyes": "Göz yapısı analizi (örn: Badem formlu, %92 derinlik uyumu)",
-        "jawline": "Çene hattı analizi (örn: Keskin/Kuvvetli)"
+        "cheekbones": "Dizilim ve simetri analizi",
+        "eyes": "Göz yapısı ve derinlik analizi",
+        "jawline": "Çene hattı keskinlik analizi"
       },
       "mainMatch": {
         "name": "Eşleşen Ünlü/Tarihi Kişi",
         "percentage": "95",
-        "reason": "Bilimsel/Teknik eşleşme nedeni (Zigomatik kemik ve nazal köprü uyumu vb.)"
+        "reason": "Bilimsel/Teknik eşleşme nedeni"
       },
       "alternatives": [
         { "name": "Alternatif 1", "percentage": "88" },
         { "name": "Alternatif 2", "percentage": "82" }
       ],
-      "soulSignature": "Yüz hatlarından yola çıkarak kişinin liderlik, sanatçılık veya savaşçı ruhu hakkında derin yorum.",
+      "soulSignature": "Psikolojik ve ruhsal karakter analizi.",
       "attributes": {
         "intelligence": 85,
         "dominance": 70,
@@ -116,18 +93,12 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
 
   if (!apiKey) {
     throw new Error(lang === 'tr' 
-      ? "API Anahtarı bulunamadı. Lütfen Gemini API Key ekleyin." 
-      : "API Key not found. Please add your Gemini API Key.");
+      ? "API Anahtarı bulunamadı! Lütfen ayarlardan VITE_KEY ekleyin." 
+      : "API Key not found! Please set VITE_KEY in environment variables.");
   }
 
-  // Google API Key'i doğrula (AIza ile başlamalı)
-  if (!apiKey.startsWith("AIza")) {
-     console.warn("⚠️ Uyarı: API Anahtarı 'AIza' ile başlamıyor. Hatalı olabilir.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey: apiKey });
+  const ai = new GoogleGenAI({ apiKey });
   const resizedBase64 = await resizeImage(base64Image);
-  // Remove header for API
   const cleanBase64 = resizedBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
 
   const instruction = getSystemInstruction(mode, style, lang);
@@ -135,38 +106,31 @@ export const analyzeImage = async (base64Image: string, mode: AnalysisMode, styl
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: {
-        parts: [
-          { text: "Analyze this image based on the biometric protocols." },
-          { 
-            inlineData: { 
-              mimeType: "image/jpeg", 
-              data: cleanBase64 
-            } 
-          }
-        ]
-      },
+      contents: [
+        { 
+          parts: [
+            { text: "Identify this person's historical/celebrity doppelganger based on the biometric rules. Return JSON only." },
+            { inlineData: { mimeType: "image/jpeg", data: cleanBase64 } }
+          ] 
+        }
+      ],
       config: {
         systemInstruction: instruction,
         responseMimeType: "application/json",
-        temperature: 0.7, // Biraz yaratıcılık ama tutarlı yapı
+        temperature: 0.1,
       }
     });
 
     const text = response.text;
-    if (!text) throw new Error("Gemini boş cevap döndürdü.");
+    if (!text) throw new Error("API'den boş yanıt geldi.");
 
-    // Temizle ve Parse et
-    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleanText) as AnalysisReport;
+    return JSON.parse(text) as AnalysisReport;
 
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
+    console.error("Gemini Error:", error);
     let msg = error.message || "Bilinmeyen Hata";
-    
-    if (msg.includes("429")) msg = "Sistem yoğunluğu (Kota Aşıldı). Lütfen bekleyin veya yeni bir API anahtarı deneyin.";
-    if (msg.includes("SAFETY")) msg = "Görsel güvenlik filtresine takıldı. Lütfen başka bir fotoğraf deneyin.";
-
+    if (msg.includes("429")) msg = "API Kotası Dolu veya Hızlı İstek Gönderildi.";
+    if (msg.includes("API_KEY_INVALID")) msg = "Geçersiz API Anahtarı! Lütfen VITE_KEY değerini kontrol edin.";
     throw new Error(msg);
   }
 };
